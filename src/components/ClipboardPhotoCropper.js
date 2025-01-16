@@ -220,74 +220,94 @@ function ClipboardPhotoCropper() {
   }, [imageRef, crop, toast]);
 
   return (
-    <VStack spacing={6} align="center" w="100%">
-      <Text fontSize="2xl" fontWeight="bold">
-        Photo Cropper
-      </Text>
-      
-      {!image && (
-        <Box 
-          p={10} 
-          border="2px dashed" 
-          borderColor="gray.300" 
-          borderRadius="md"
-          textAlign="center"
-          w="100%"
-          onPaste={handlePaste}
-        >
-          <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
-        </Box>
-      )}
-
-      {image && (
-        <VStack spacing={4} w="100%" maxW="800px" onPaste={handlePaste}>
-          <ReactCrop
-            crop={crop}
-            onChange={c => setCrop(c)}
-            aspect={undefined}
+    <Box p={6} maxW="800px" mx="auto" onPaste={handlePaste}>
+      <VStack spacing={6} align="stretch">
+        <Text fontSize="2xl" fontWeight="bold">
+          Photo Cropper
+        </Text>
+        
+        {!image && (
+          <Box 
+            p={10} 
+            border="2px dashed" 
+            borderColor="gray.300" 
+            borderRadius="md"
+            textAlign="center"
+            onPaste={handlePaste}
           >
-            <img
-              ref={ref => setImageRef(ref)}
-              src={image}
-              style={{ transform: `scale(${scale})` }}
-              alt="Clipboard"
-            />
-          </ReactCrop>
-
-          <HStack spacing={4}>
-            <Button colorScheme="blue" onClick={saveToClipboard}>
-              Save to Clipboard
-            </Button>
-            <Button colorScheme="green" onClick={downloadImage}>
-              Download
-            </Button>
-            <Button colorScheme="red" onClick={resetApp}>
-              Reset
-            </Button>
-          </HStack>
-
-          <Text fontSize="sm" color="gray.500">
-            Image size: {imageSize ? `${imageSize} MB` : 'Unknown'}
-          </Text>
-
-          <Box w="100%" maxW="300px">
-            <Text mb={2}>Scale</Text>
-            <Slider
-              value={scale}
-              min={0.1}
-              max={3}
-              step={0.1}
-              onChange={setScale}
-            >
-              <SliderTrack>
-                <SliderFilledTrack />
-              </SliderTrack>
-              <SliderThumb />
-            </Slider>
+            <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
           </Box>
-        </VStack>
-      )}
-    </VStack>
+        )}
+
+        {image && (
+          <VStack spacing={4} onPaste={handlePaste}>
+            <Box borderRadius="md" overflow="hidden">
+              <ReactCrop
+                crop={crop}
+                onChange={c => setCrop(c)}
+                aspect={undefined}
+              >
+                <img
+                  ref={ref => setImageRef(ref)}
+                  src={image}
+                  style={{ transform: `scale(${scale})` }}
+                  alt="Clipboard"
+                />
+              </ReactCrop>
+            </Box>
+
+            <VStack w="100%" spacing={4}>
+            <HStack w="100%" justify="space-between">
+                <Text>Scale:</Text>
+                <Box w="70%">
+                  <Slider
+                    value={scale}
+                    min={0.1}
+                    max={3}
+                    step={0.1}
+                    onChange={setScale}
+                  >
+                    <SliderTrack>
+                      <SliderFilledTrack />
+                    </SliderTrack>
+                    <SliderThumb />
+                  </Slider>
+                </Box>
+              </HStack>
+
+              <HStack w="100%" justify="space-between">
+                <Text>Image size:</Text>
+                <Text>{imageSize ? `${imageSize} MB` : 'Unknown'}</Text>
+              </HStack>
+
+              <HStack w="100%" spacing={4}>
+                <Button 
+                  colorScheme="red" 
+                  onClick={resetApp}
+                  flex={1}
+                >
+                  Reset
+                </Button>
+                <Button 
+                  colorScheme="blue" 
+                  onClick={saveToClipboard}
+                  flex={1}
+                >
+                  Copy to Clipboard
+                </Button>
+                <Button 
+                  colorScheme="green" 
+                  onClick={downloadImage}
+                  flex={1}
+                >
+                  Download as PNG
+                </Button>
+              </HStack>
+            </VStack>
+          </VStack>
+        )}
+      </VStack>
+    </Box>
   );
 }
 
