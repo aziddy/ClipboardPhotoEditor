@@ -12,6 +12,7 @@ import {
   SliderTrack,
   SliderFilledTrack,
   SliderThumb,
+  Badge,
 } from '@chakra-ui/react';
 
 function App() {
@@ -19,7 +20,29 @@ function App() {
   const [crop, setCrop] = useState();
   const [scale, setScale] = useState(1);
   const [imageRef, setImageRef] = useState(null);
+  const [imageSize, setImageSize] = useState(null);
   const toast = useToast();
+
+  const calculateImageSize = useCallback((canvas) => {
+    return new Promise((resolve) => {
+      if (!canvas) {
+        setImageSize(null);
+        resolve(null);
+        return;
+      }
+      
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          setImageSize(null);
+          resolve(null);
+          return;
+        }
+        const sizeInMB = (blob.size / (1024 * 1024)).toFixed(2);
+        setImageSize(sizeInMB);
+        resolve(blob);
+      }, 'image/png');
+    });
+  }, []);
 
   const handlePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
@@ -33,6 +56,7 @@ function App() {
       const blob = imageItem.getAsFile();
       const url = URL.createObjectURL(blob);
       setImage(url);
+      setImageSize((blob.size / (1024 * 1024)).toFixed(2));
     } else {
       toast({
         title: 'Error',
@@ -43,6 +67,50 @@ function App() {
       });
     }
   }, [toast]);
+
+  const updateImageSize = useCallback(() => {
+    if (!imageRef || !crop || !crop.width || !crop.height) {
+      setImageSize(null);
+      return;
+    }
+
+    try {
+      const canvas = document.createElement('canvas');
+      const scaleX = imageRef.naturalWidth / imageRef.width;
+      const scaleY = imageRef.naturalHeight / imageRef.height;
+
+      canvas.width = crop.width;
+      canvas.height = crop.height;
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        setImageSize(null);
+        return;
+      }
+
+      ctx.drawImage(
+        imageRef,
+        crop.x * scaleX,
+        crop.y * scaleY,
+        crop.width * scaleX,
+        crop.height * scaleY,
+        0,
+        0,
+        crop.width,
+        crop.height
+      );
+
+      calculateImageSize(canvas);
+    } catch (err) {
+      setImageSize(null);
+      console.error('Error updating image size:', err);
+    }
+  }, [imageRef, crop, calculateImageSize]);
+
+  // Update size when crop or scale changes
+  React.useEffect(() => {
+    updateImageSize();
+  }, [crop, scale, updateImageSize]);
 
   const saveToClipboard = useCallback(async () => {
     if (!imageRef || !crop) return;
@@ -68,20 +136,19 @@ function App() {
     );
 
     try {
-      canvas.toBlob(async (blob) => {
-        await navigator.clipboard.write([
-          new ClipboardItem({
-            'image/png': blob
-          })
-        ]);
-        toast({
-          title: 'Success',
-          description: 'Image saved to clipboard',
-          status: 'success',
-          duration: 3000,
-          isClosable: true,
-        });
-      }, 'image/png');
+      const blob = await calculateImageSize(canvas);
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'image/png': blob
+        })
+      ]);
+      toast({
+        title: 'Success',
+        description: 'Image saved to clipboard',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      });
     } catch (err) {
       toast({
         title: 'Error',
@@ -91,7 +158,7 @@ function App() {
         isClosable: true,
       });
     }
-  }, [imageRef, crop, toast]);
+  }, [imageRef, crop, toast, calculateImageSize]);
 
   return (
     <Box 
@@ -147,6 +214,13 @@ function App() {
                 <SliderThumb />
               </Slider>
             </HStack>
+
+            {imageSize && (
+              <HStack>
+                <Text>Estimated Size:</Text>
+                <Badge colorScheme="blue">{imageSize} MB</Badge>
+              </HStack>
+            )}
 
             <Button
               colorScheme="blue"
