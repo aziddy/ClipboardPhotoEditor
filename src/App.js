@@ -23,6 +23,14 @@ function App() {
   const [imageSize, setImageSize] = useState(null);
   const toast = useToast();
 
+  const resetApp = useCallback(() => {
+    setImage(null);
+    setCrop(undefined);
+    setScale(1);
+    setImageRef(null);
+    setImageSize(null);
+  }, []);
+
   const calculateImageSize = useCallback((canvas) => {
     return new Promise((resolve) => {
       if (!canvas) {
@@ -257,6 +265,9 @@ function App() {
               </Button>
               <Button colorScheme="green" onClick={downloadImage}>
                 Download
+              </Button>
+              <Button colorScheme="red" onClick={resetApp}>
+                Reset
               </Button>
             </HStack>
 
