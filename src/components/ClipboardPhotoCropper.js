@@ -84,8 +84,11 @@ function ClipboardPhotoCropper() {
       const scaleX = imageRef.naturalWidth / imageRef.width;
       const scaleY = imageRef.naturalHeight / imageRef.height;
 
-      canvas.width = crop.width;
-      canvas.height = crop.height;
+      const outputWidth = Math.round(crop.width * scaleX);
+      const outputHeight = Math.round(crop.height * scaleY);
+
+      canvas.width = outputWidth;
+      canvas.height = outputHeight;
       const ctx = canvas.getContext('2d');
 
       if (!ctx) {
@@ -101,8 +104,8 @@ function ClipboardPhotoCropper() {
         crop.height * scaleY,
         0,
         0,
-        crop.width,
-        crop.height
+        outputWidth,
+        outputHeight
       );
 
       calculateImageSize(canvas);
@@ -124,9 +127,24 @@ function ClipboardPhotoCropper() {
     const scaleX = imageRef.naturalWidth / imageRef.width;
     const scaleY = imageRef.naturalHeight / imageRef.height;
 
-    canvas.width = crop.width;
-    canvas.height = crop.height;
+    // Calculate output dimensions
+    const outputWidth = Math.round(crop.width * scaleX);
+    const outputHeight = Math.round(crop.height * scaleY);
+
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
     const ctx = canvas.getContext('2d');
+
+    console.log('Original dimensions:', {
+      naturalWidth: imageRef.naturalWidth,
+      naturalHeight: imageRef.naturalHeight,
+      displayWidth: imageRef.width,
+      displayHeight: imageRef.height,
+      cropWidth: crop.width,
+      cropHeight: crop.height,
+      outputWidth,
+      outputHeight
+    });
 
     ctx.drawImage(
       imageRef,
@@ -136,8 +154,8 @@ function ClipboardPhotoCropper() {
       crop.height * scaleY,
       0,
       0,
-      crop.width,
-      crop.height
+      outputWidth,
+      outputHeight
     );
 
     try {
@@ -172,8 +190,11 @@ function ClipboardPhotoCropper() {
     const scaleX = imageRef.naturalWidth / imageRef.width;
     const scaleY = imageRef.naturalHeight / imageRef.height;
 
-    canvas.width = crop.width;
-    canvas.height = crop.height;
+    const outputWidth = Math.round(crop.width * scaleX);
+    const outputHeight = Math.round(crop.height * scaleY);
+
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
     const ctx = canvas.getContext('2d');
 
     ctx.drawImage(
@@ -184,8 +205,8 @@ function ClipboardPhotoCropper() {
       crop.height * scaleY,
       0,
       0,
-      crop.width,
-      crop.height
+      outputWidth,
+      outputHeight
     );
 
     try {
