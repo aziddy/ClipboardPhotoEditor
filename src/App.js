@@ -251,12 +251,25 @@ function App() {
               />
             </ReactCrop>
 
-            <HStack w="100%" spacing={4}>
-              <Text minW="80px">Scale:</Text>
+            <HStack spacing={4}>
+              <Button colorScheme="blue" onClick={saveToClipboard}>
+                Save to Clipboard
+              </Button>
+              <Button colorScheme="green" onClick={downloadImage}>
+                Download
+              </Button>
+            </HStack>
+
+            <Text fontSize="sm" color="gray.500">
+              Image size: {imageSize ? `${imageSize} MB` : 'Unknown'}
+            </Text>
+
+            <Box w="100%" maxW="300px">
+              <Text mb={2}>Scale</Text>
               <Slider
                 value={scale}
-                min={0.5}
-                max={2}
+                min={0.1}
+                max={3}
                 step={0.1}
                 onChange={setScale}
               >
@@ -265,33 +278,10 @@ function App() {
                 </SliderTrack>
                 <SliderThumb />
               </Slider>
-            </HStack>
-
-            {imageSize && (
-              <HStack>
-                <Text>Estimated Size:</Text>
-                <Badge colorScheme="blue">{imageSize} MB</Badge>
-              </HStack>
-            )}
-
-            <HStack spacing={4}>
-              <Button
-                colorScheme="blue"
-                onClick={saveToClipboard}
-                isDisabled={!crop}
-              >
-                Save to Clipboard
-              </Button>
-              <Button
-                colorScheme="green"
-                onClick={downloadImage}
-                isDisabled={!crop}
-              >
-                Download PNG
-              </Button>
-            </HStack>
+            </Box>
           </VStack>
         )}
+        <Text fontSize="sm" color="gray.500">by Alex Zidros</Text>
       </VStack>
     </Box>
   );
