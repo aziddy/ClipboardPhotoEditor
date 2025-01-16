@@ -17,7 +17,6 @@ import {
 function ClipboardPhotoCropper() {
   const [image, setImage] = useState(null);
   const [crop, setCrop] = useState();
-  const [scale, setScale] = useState(1);
   const [imageRef, setImageRef] = useState(null);
   const [imageSize, setImageSize] = useState(null);
   const toast = useToast();
@@ -25,7 +24,6 @@ function ClipboardPhotoCropper() {
   const resetApp = useCallback(() => {
     setImage(null);
     setCrop(undefined);
-    setScale(1);
     setImageRef(null);
     setImageSize(null);
   }, []);
@@ -114,10 +112,10 @@ function ClipboardPhotoCropper() {
     }
   }, [imageRef, crop, calculateImageSize]);
 
-  // Update size when crop or scale changes
+  // Update size when crop changes
   React.useEffect(() => {
     updateImageSize();
-  }, [crop, scale, updateImageSize]);
+  }, [crop, updateImageSize]);
 
   const saveToClipboard = useCallback(async () => {
     if (!imageRef || !crop) return;
@@ -250,31 +248,12 @@ function ClipboardPhotoCropper() {
                 <img
                   ref={ref => setImageRef(ref)}
                   src={image}
-                  style={{ transform: `scale(${scale})` }}
                   alt="Clipboard"
                 />
               </ReactCrop>
             </Box>
 
             <VStack w="100%" spacing={4}>
-            <HStack w="100%" justify="space-between">
-                <Text>Scale:</Text>
-                <Box w="70%">
-                  <Slider
-                    value={scale}
-                    min={0.1}
-                    max={3}
-                    step={0.1}
-                    onChange={setScale}
-                  >
-                    <SliderTrack>
-                      <SliderFilledTrack />
-                    </SliderTrack>
-                    <SliderThumb />
-                  </Slider>
-                </Box>
-              </HStack>
-
               <HStack w="100%" justify="space-between">
                 <Text>Image size:</Text>
                 <Text>{imageSize ? `${imageSize} MB` : 'Unknown'}</Text>
