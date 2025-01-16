@@ -160,6 +160,58 @@ function App() {
     }
   }, [imageRef, crop, toast, calculateImageSize]);
 
+  const downloadImage = useCallback(async () => {
+    if (!imageRef || !crop) return;
+
+    const canvas = document.createElement('canvas');
+    const scaleX = imageRef.naturalWidth / imageRef.width;
+    const scaleY = imageRef.naturalHeight / imageRef.height;
+
+    canvas.width = crop.width;
+    canvas.height = crop.height;
+    const ctx = canvas.getContext('2d');
+
+    ctx.drawImage(
+      imageRef,
+      crop.x * scaleX,
+      crop.y * scaleY,
+      crop.width * scaleX,
+      crop.height * scaleY,
+      0,
+      0,
+      crop.width,
+      crop.height
+    );
+
+    try {
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'edited-image.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Success',
+        description: 'Image downloaded successfully',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (err) {
+      toast({
+        title: 'Error',
+        description: 'Failed to download image',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    }
+  }, [imageRef, crop, toast]);
+
   return (
     <Box 
       p={8} 
@@ -222,13 +274,22 @@ function App() {
               </HStack>
             )}
 
-            <Button
-              colorScheme="blue"
-              onClick={saveToClipboard}
-              isDisabled={!crop}
-            >
-              Save to Clipboard
-            </Button>
+            <HStack spacing={4}>
+              <Button
+                colorScheme="blue"
+                onClick={saveToClipboard}
+                isDisabled={!crop}
+              >
+                Save to Clipboard
+              </Button>
+              <Button
+                colorScheme="green"
+                onClick={downloadImage}
+                isDisabled={!crop}
+              >
+                Download PNG
+              </Button>
+            </HStack>
           </VStack>
         )}
       </VStack>
