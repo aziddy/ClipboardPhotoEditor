@@ -222,85 +222,87 @@ function ClipboardPhotoResizer() {
   }, [handlePaste]);
 
   return (
-    <VStack spacing={6} align="stretch">
-      <Text fontSize="2xl" fontWeight="bold">Photo Resizer</Text>
-      
-      {!image && (
-        <Box p={10} border="2px dashed" borderColor="gray.300" borderRadius="md" textAlign="center">
-          <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
-        </Box>
-      )}
-
-      {image && (
-        <>
-          <Box borderRadius="md" overflow="hidden">
-            <img
-              src={previewUrl || image.src}
-              alt="Preview"
-              style={{
-                width: '100%',
-                height: 'auto',
-                objectFit: 'contain',
-              }}
-            />
+    <Box p={6} maxW="800px" mx="auto">
+      <VStack spacing={6} align="stretch">
+        <Text fontSize="2xl" fontWeight="bold">Clipboard Photo Resizer</Text>
+        
+        {!image && (
+          <Box p={10} border="2px dashed" borderColor="gray.300" borderRadius="md" textAlign="center">
+            <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
           </Box>
+        )}
 
-          <VStack spacing={4}>
-            <HStack w="100%" justify="space-between">
-              <Text>Scale: {scale}%</Text>
-              <Slider
-                value={scale}
-                onChange={setScale}
-                min={1}
-                max={100}
-                w="70%"
-              >
-                <SliderTrack>
-                  <SliderFilledTrack />
-                </SliderTrack>
-                <SliderThumb />
-              </Slider>
-            </HStack>
+        {image && (
+          <>
+            <Box borderRadius="md" overflow="hidden">
+              <img
+                src={previewUrl || image.src}
+                alt="Preview"
+                style={{
+                  width: '100%',
+                  height: 'auto',
+                  objectFit: 'contain',
+                }}
+              />
+            </Box>
 
-            <HStack w="100%" justify="space-between">
-              <Text>Output Size:</Text>
-              <Text>{(fileSize / (1024 * 1024)).toFixed(2)} MB</Text>
-            </HStack>
+            <VStack spacing={4}>
+              <HStack w="100%" justify="space-between">
+                <Text>Scale: {scale}%</Text>
+                <Slider
+                  value={scale}
+                  onChange={setScale}
+                  min={1}
+                  max={100}
+                  w="70%"
+                >
+                  <SliderTrack>
+                    <SliderFilledTrack />
+                  </SliderTrack>
+                  <SliderThumb />
+                </Slider>
+              </HStack>
 
-            <HStack w="100%" justify="space-between">
-              <Text>Dimensions:</Text>
-              <Text>
-                {Math.round(dimensions.width * scale / 100)} x {Math.round(dimensions.height * scale / 100)} px
-              </Text>
-            </HStack>
+              <HStack w="100%" justify="space-between">
+                <Text>Output Size:</Text>
+                <Text>{(fileSize / (1024 * 1024)).toFixed(2)} MB</Text>
+              </HStack>
 
-            <HStack w="100%" spacing={4}>
-              <Button 
-                colorScheme="red" 
-                onClick={resetApp}
-                flex={1}
-              >
-                Reset
-              </Button>
-              <Button 
-                colorScheme="blue" 
-                onClick={copyToClipboard} 
-                flex={1}
-              >
-                Copy to Clipboard
-              </Button>
-              <Button 
-                colorScheme="green" 
-                onClick={downloadAsPNG} 
-                flex={1}
-              >
-                Download as PNG
-              </Button>
-            </HStack>
-          </VStack>
-        </>
-      )}
-    </VStack>
+              <HStack w="100%" justify="space-between">
+                <Text>Dimensions:</Text>
+                <Text>
+                  {Math.round(dimensions.width * scale / 100)} x {Math.round(dimensions.height * scale / 100)} px
+                </Text>
+              </HStack>
+
+              <HStack w="100%" spacing={4}>
+                <Button 
+                  colorScheme="red" 
+                  onClick={resetApp}
+                  flex={1}
+                >
+                  Reset
+                </Button>
+                <Button 
+                  colorScheme="blue" 
+                  onClick={copyToClipboard} 
+                  flex={1}
+                >
+                  Copy to Clipboard
+                </Button>
+                <Button 
+                  colorScheme="green" 
+                  onClick={downloadAsPNG} 
+                  flex={1}
+                >
+                  Download as PNG
+                </Button>
+              </HStack>
+            </VStack>
+          </>
+        )}
+      </VStack>
+    </Box>
   );
 }
 

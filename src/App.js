@@ -28,7 +28,6 @@ function App() {
           w="100%" 
           index={tabIndex} 
           onChange={setTabIndex}
-          // isLazy
         >
           <TabList mb="1em">
             <Tab>Photo Resizer</Tab>
@@ -36,11 +35,11 @@ function App() {
           </TabList>
 
           <TabPanels>
-            <TabPanel>
-              {tabIndex === 0 && <ClipboardPhotoResizer />}
+            <TabPanel p={0}>
+              <ClipboardPhotoResizer />
             </TabPanel>
-            <TabPanel>
-              {tabIndex === 1 && <ClipboardPhotoCropper />}
+            <TabPanel p={0}>
+              <ClipboardPhotoCropper />
             </TabPanel>
           </TabPanels>
         </Tabs>
