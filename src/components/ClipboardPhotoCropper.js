@@ -50,6 +50,9 @@ function ClipboardPhotoCropper() {
   }, []);
 
   const handlePaste = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -239,7 +242,10 @@ function ClipboardPhotoCropper() {
   }, [imageRef, crop, toast]);
 
   return (
-    <Box p={6} maxW="800px" mx="auto" onPaste={handlePaste}>
+    <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
+      e.stopPropagation();
+      handlePaste(e);
+    }}>
       <VStack spacing={6} align="stretch">
         <Text fontSize="2xl" fontWeight="bold">
           Photo Cropper
@@ -252,14 +258,20 @@ function ClipboardPhotoCropper() {
             borderColor="gray.300" 
             borderRadius="md"
             textAlign="center"
-            onPaste={handlePaste}
+            onPaste={(e) => {
+              e.stopPropagation();
+              handlePaste(e);
+            }}
           >
             <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
           </Box>
         )}
 
         {image && (
-          <VStack spacing={4} onPaste={handlePaste}>
+          <VStack spacing={4} onPaste={(e) => {
+            e.stopPropagation();
+            handlePaste(e);
+          }}>
             <Box borderRadius="md" overflow="hidden">
               <ReactCrop
                 crop={crop}
