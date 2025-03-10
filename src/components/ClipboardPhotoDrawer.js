@@ -33,6 +33,23 @@ function ClipboardPhotoDrawer() {
   const contextRef = useRef(null);
   const toast = useToast();
 
+
+  const undo = useCallback(() => {
+    if (currentHistoryIndex <= 0) return;
+    
+    const newIndex = currentHistoryIndex - 1;
+    setCurrentHistoryIndex(newIndex);
+    
+    const img = new Image();
+    img.src = drawingHistory[newIndex];
+    img.onload = () => {
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(img, 0, 0);
+    };
+  }, [currentHistoryIndex, drawingHistory]);
+
   // Initialize canvas context
   useEffect(() => {
     if (canvasRef.current && image) {
@@ -78,7 +95,7 @@ function ClipboardPhotoDrawer() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [undo]);
 
   const saveToHistory = useCallback(() => {
     if (!canvasRef.current) return;
@@ -89,21 +106,6 @@ function ClipboardPhotoDrawer() {
     setCurrentHistoryIndex(newHistory.length - 1);
   }, [drawingHistory, currentHistoryIndex]);
 
-  const undo = useCallback(() => {
-    if (currentHistoryIndex <= 0) return;
-    
-    const newIndex = currentHistoryIndex - 1;
-    setCurrentHistoryIndex(newIndex);
-    
-    const img = new Image();
-    img.src = drawingHistory[newIndex];
-    img.onload = () => {
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(img, 0, 0);
-    };
-  }, [currentHistoryIndex, drawingHistory]);
 
   const startDrawing = useCallback((e) => {
     const canvas = canvasRef.current;
