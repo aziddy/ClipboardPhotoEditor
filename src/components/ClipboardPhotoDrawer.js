@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import ReactCrop from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import {
@@ -12,6 +12,9 @@ import {
   SliderTrack,
   SliderFilledTrack,
   SliderThumb,
+  Input,
+  IconButton,
+  Tooltip,
 } from '@chakra-ui/react';
 
 function ClipboardPhotoDrawer() {
@@ -19,13 +22,131 @@ function ClipboardPhotoDrawer() {
   const [crop, setCrop] = useState();
   const [imageRef, setImageRef] = useState(null);
   const [imageSize, setImageSize] = useState(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawingColor, setDrawingColor] = useState('#000000');
+  const [strokeSize, setStrokeSize] = useState(5);
+  const [isEraser, setIsEraser] = useState(false);
+  const [drawingHistory, setDrawingHistory] = useState([]);
+  const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1);
+  
+  const canvasRef = useRef(null);
+  const contextRef = useRef(null);
   const toast = useToast();
+
+  // Initialize canvas context
+  useEffect(() => {
+    if (canvasRef.current && image) {
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      
+      // Enable anti-aliasing
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.strokeStyle = drawingColor;
+      context.lineWidth = strokeSize;
+      
+      contextRef.current = context;
+      
+      // Load the initial image onto canvas
+      const img = new Image();
+      img.src = image;
+      img.onload = () => {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        context.drawImage(img, 0, 0);
+        saveToHistory();
+      };
+    }
+  }, [image]);
+
+  // Update context when color or stroke size changes
+  useEffect(() => {
+    if (contextRef.current) {
+      contextRef.current.strokeStyle = isEraser ? '#ffffff' : drawingColor;
+      contextRef.current.lineWidth = strokeSize;
+    }
+  }, [drawingColor, strokeSize, isEraser]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault();
+        undo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const saveToHistory = useCallback(() => {
+    if (!canvasRef.current) return;
+    
+    const newHistory = drawingHistory.slice(0, currentHistoryIndex + 1);
+    newHistory.push(canvasRef.current.toDataURL());
+    setDrawingHistory(newHistory);
+    setCurrentHistoryIndex(newHistory.length - 1);
+  }, [drawingHistory, currentHistoryIndex]);
+
+  const undo = useCallback(() => {
+    if (currentHistoryIndex <= 0) return;
+    
+    const newIndex = currentHistoryIndex - 1;
+    setCurrentHistoryIndex(newIndex);
+    
+    const img = new Image();
+    img.src = drawingHistory[newIndex];
+    img.onload = () => {
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(img, 0, 0);
+    };
+  }, [currentHistoryIndex, drawingHistory]);
+
+  const startDrawing = useCallback((e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    contextRef.current.beginPath();
+    contextRef.current.moveTo(x, y);
+    setIsDrawing(true);
+  }, []);
+
+  const draw = useCallback((e) => {
+    if (!isDrawing) return;
+    
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    contextRef.current.lineTo(x, y);
+    contextRef.current.stroke();
+  }, [isDrawing]);
+
+  const stopDrawing = useCallback(() => {
+    if (!isDrawing) return;
+    
+    contextRef.current.closePath();
+    setIsDrawing(false);
+    saveToHistory();
+  }, [isDrawing, saveToHistory]);
 
   const resetApp = useCallback(() => {
     setImage(null);
     setCrop(undefined);
     setImageRef(null);
     setImageSize(null);
+    setIsDrawing(false);
+    setDrawingColor('#000000');
+    setStrokeSize(5);
+    setIsEraser(false);
+    setDrawingHistory([]);
+    setCurrentHistoryIndex(-1);
   }, []);
 
   const calculateImageSize = useCallback((canvas) => {
@@ -120,46 +241,12 @@ function ClipboardPhotoDrawer() {
     updateImageSize();
   }, [crop, updateImageSize]);
 
+  // Modify saveToClipboard to use canvas content
   const saveToClipboard = useCallback(async () => {
-    if (!imageRef || !crop) return;
-
-    const canvas = document.createElement('canvas');
-    const scaleX = imageRef.naturalWidth / imageRef.width;
-    const scaleY = imageRef.naturalHeight / imageRef.height;
-
-    // Calculate output dimensions
-    const outputWidth = Math.round(crop.width * scaleX);
-    const outputHeight = Math.round(crop.height * scaleY);
-
-    canvas.width = outputWidth;
-    canvas.height = outputHeight;
-    const ctx = canvas.getContext('2d');
-
-    console.log('Original dimensions:', {
-      naturalWidth: imageRef.naturalWidth,
-      naturalHeight: imageRef.naturalHeight,
-      displayWidth: imageRef.width,
-      displayHeight: imageRef.height,
-      cropWidth: crop.width,
-      cropHeight: crop.height,
-      outputWidth,
-      outputHeight
-    });
-
-    ctx.drawImage(
-      imageRef,
-      crop.x * scaleX,
-      crop.y * scaleY,
-      crop.width * scaleX,
-      crop.height * scaleY,
-      0,
-      0,
-      outputWidth,
-      outputHeight
-    );
+    if (!canvasRef.current) return;
 
     try {
-      const blob = await calculateImageSize(canvas);
+      const blob = await new Promise(resolve => canvasRef.current.toBlob(resolve, 'image/png'));
       await navigator.clipboard.write([
         new ClipboardItem({
           'image/png': blob
@@ -181,44 +268,20 @@ function ClipboardPhotoDrawer() {
         isClosable: true,
       });
     }
-  }, [imageRef, crop, toast, calculateImageSize]);
+  }, [toast]);
 
+  // Modify downloadImage to use canvas content
   const downloadImage = useCallback(async () => {
-    if (!imageRef || !crop) return;
-
-    const canvas = document.createElement('canvas');
-    const scaleX = imageRef.naturalWidth / imageRef.width;
-    const scaleY = imageRef.naturalHeight / imageRef.height;
-
-    const outputWidth = Math.round(crop.width * scaleX);
-    const outputHeight = Math.round(crop.height * scaleY);
-
-    canvas.width = outputWidth;
-    canvas.height = outputHeight;
-    const ctx = canvas.getContext('2d');
-
-    ctx.drawImage(
-      imageRef,
-      crop.x * scaleX,
-      crop.y * scaleY,
-      crop.width * scaleX,
-      crop.height * scaleY,
-      0,
-      0,
-      outputWidth,
-      outputHeight
-    );
+    if (!canvasRef.current) return;
 
     try {
-      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-      const url = URL.createObjectURL(blob);
+      const url = canvasRef.current.toDataURL('image/png');
       const link = document.createElement('a');
       link.href = url;
       link.download = 'edited-image.png';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(url);
 
       toast({
         title: 'Success',
@@ -236,13 +299,13 @@ function ClipboardPhotoDrawer() {
         isClosable: true,
       });
     }
-  }, [imageRef, crop, toast]);
+  }, [toast]);
 
   return (
     <Box p={6} maxW="800px" mx="auto" onPaste={handlePaste}>
       <VStack spacing={6} align="stretch">
         <Text fontSize="2xl" fontWeight="bold">
-          Photo Cropper
+          Photo Editor
         </Text>
         
         {!image && (
@@ -260,24 +323,66 @@ function ClipboardPhotoDrawer() {
 
         {image && (
           <VStack spacing={4} onPaste={handlePaste}>
-            <Box borderRadius="md" overflow="hidden">
-              <ReactCrop
-                crop={crop}
-                onChange={c => setCrop(c)}
-                aspect={undefined}
-              >
-                <img
-                  ref={ref => setImageRef(ref)}
-                  src={image}
-                  alt="Clipboard"
-                />
-              </ReactCrop>
+            <Box borderRadius="md" overflow="hidden" position="relative">
+              <canvas
+                ref={canvasRef}
+                onMouseDown={startDrawing}
+                onMouseMove={draw}
+                onMouseUp={stopDrawing}
+                onMouseLeave={stopDrawing}
+                style={{
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '0.375rem',
+                  cursor: isEraser ? 'crosshair' : 'pointer',
+                }}
+              />
             </Box>
 
             <VStack w="100%" spacing={4}>
-              <HStack w="100%" justify="space-between">
-                <Text>Image size:</Text>
-                <Text>{imageSize ? `${imageSize} MB` : 'Unknown'}</Text>
+              <HStack w="100%" justify="space-between" align="center">
+                <Text>Drawing Color:</Text>
+                <Input
+                  type="color"
+                  value={drawingColor}
+                  onChange={(e) => setDrawingColor(e.target.value)}
+                  width="100px"
+                  disabled={isEraser}
+                />
+              </HStack>
+
+              <HStack w="100%" justify="space-between" align="center">
+                <Text>Stroke Size:</Text>
+                <Slider
+                  value={strokeSize}
+                  onChange={setStrokeSize}
+                  min={1}
+                  max={50}
+                  width="200px"
+                >
+                  <SliderTrack>
+                    <SliderFilledTrack />
+                  </SliderTrack>
+                  <SliderThumb />
+                </Slider>
+                <Text>{strokeSize}px</Text>
+              </HStack>
+
+              <HStack w="100%" spacing={4}>
+                <Button
+                  colorScheme={isEraser ? 'blue' : 'gray'}
+                  onClick={() => setIsEraser(!isEraser)}
+                  flex={1}
+                >
+                  {isEraser ? 'Drawing Mode' : 'Eraser Mode'}
+                </Button>
+                <Button
+                  colorScheme="gray"
+                  onClick={undo}
+                  isDisabled={currentHistoryIndex <= 0}
+                  flex={1}
+                >
+                  Undo (Cmd+Z)
+                </Button>
               </HStack>
 
               <HStack w="100%" spacing={4}>
