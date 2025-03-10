@@ -35,6 +35,9 @@ function ClipboardPhotoResizer() {
   }, [toast]);
 
   const handlePaste = useCallback(async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
     const items = e.clipboardData.items;
     const item = [...items].find(item => item.type.startsWith('image/'));
     
@@ -216,13 +219,11 @@ function ClipboardPhotoResizer() {
     link.click();
   }, [processImage]);
 
-  React.useEffect(() => {
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [handlePaste]);
-
   return (
-    <Box p={6} maxW="800px" mx="auto">
+    <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
+      e.stopPropagation();
+      handlePaste(e);
+    }}>
       <VStack spacing={6} align="stretch">
         <Text fontSize="2xl" fontWeight="bold">Clipboard Photo Resizer</Text>
         

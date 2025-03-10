@@ -23,7 +23,7 @@ function ClipboardPhotoDrawer() {
   const [imageRef, setImageRef] = useState(null);
   const [imageSize, setImageSize] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [drawingColor, setDrawingColor] = useState('#000000');
+  const [drawingColor, setDrawingColor] = useState('#FF0000');
   const [strokeSize, setStrokeSize] = useState(5);
   const [isEraser, setIsEraser] = useState(false);
   const [drawingHistory, setDrawingHistory] = useState([]);
@@ -59,7 +59,7 @@ function ClipboardPhotoDrawer() {
       // Enable anti-aliasing
       context.lineCap = 'round';
       context.lineJoin = 'round';
-      context.strokeStyle = drawingColor;
+      context.strokeStyle = isEraser ? '#ffffff' : drawingColor;
       context.lineWidth = strokeSize;
       
       contextRef.current = context;
@@ -71,6 +71,11 @@ function ClipboardPhotoDrawer() {
         canvas.width = img.width;
         canvas.height = img.height;
         context.drawImage(img, 0, 0);
+        // Re-apply context settings after canvas resize
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        context.strokeStyle = isEraser ? '#ffffff' : drawingColor;
+        context.lineWidth = strokeSize;
         saveToHistory();
       };
     }
@@ -144,7 +149,7 @@ function ClipboardPhotoDrawer() {
     setImageRef(null);
     setImageSize(null);
     setIsDrawing(false);
-    setDrawingColor('#000000');
+    setDrawingColor('#FF0000');
     setStrokeSize(5);
     setIsEraser(false);
     setDrawingHistory([]);
@@ -173,6 +178,9 @@ function ClipboardPhotoDrawer() {
   }, []);
 
   const handlePaste = useCallback((e) => {
+    e.preventDefault(); // Prevent default paste behavior
+    e.stopPropagation(); // Stop event from bubbling up
+    
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -304,7 +312,10 @@ function ClipboardPhotoDrawer() {
   }, [toast]);
 
   return (
-    <Box p={6} maxW="800px" mx="auto" onPaste={handlePaste}>
+    <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
+      e.stopPropagation();
+      handlePaste(e);
+    }}>
       <VStack spacing={6} align="stretch">
         <Text fontSize="2xl" fontWeight="bold">
           Photo Editor
@@ -317,14 +328,20 @@ function ClipboardPhotoDrawer() {
             borderColor="gray.300" 
             borderRadius="md"
             textAlign="center"
-            onPaste={handlePaste}
+            onPaste={(e) => {
+              e.stopPropagation();
+              handlePaste(e);
+            }}
           >
             <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
           </Box>
         )}
 
         {image && (
-          <VStack spacing={4} onPaste={handlePaste}>
+          <VStack spacing={4} onPaste={(e) => {
+            e.stopPropagation();
+            handlePaste(e);
+          }}>
             <Box borderRadius="md" overflow="hidden" position="relative">
               <canvas
                 ref={canvasRef}
@@ -371,11 +388,11 @@ function ClipboardPhotoDrawer() {
 
               <HStack w="100%" spacing={4}>
                 <Button
-                  colorScheme={isEraser ? 'blue' : 'gray'}
+                  colorScheme={isEraser ? 'pink' : 'blue'}
                   onClick={() => setIsEraser(!isEraser)}
                   flex={1}
                 >
-                  {isEraser ? 'Drawing Mode' : 'Eraser Mode'}
+                  {isEraser ? 'Eraser Mode' : 'Drawing Mode'}
                 </Button>
                 <Button
                   colorScheme="gray"
