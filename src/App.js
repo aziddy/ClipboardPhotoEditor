@@ -11,7 +11,7 @@ import {
 } from '@chakra-ui/react';
 import ClipboardPhotoCropper from './components/ClipboardPhotoCropper';
 import ClipboardPhotoResizer from './components/ClipboardPhotoResizer';
-
+import ClipboardPhotoDrawer from './components/ClipboardPhotoDrawer';
 function App() {
   const [tabIndex, setTabIndex] = useState(0);
 
@@ -32,6 +32,7 @@ function App() {
           <TabList mb="1em">
             <Tab>Photo Resizer</Tab>
             <Tab>Photo Cropper</Tab>
+            <Tab>Photo Drawer</Tab>
           </TabList>
 
           <TabPanels>
@@ -40,6 +41,9 @@ function App() {
             </TabPanel>
             <TabPanel p={0}>
               <ClipboardPhotoCropper />
+            </TabPanel>
+            <TabPanel p={0}>
+              <ClipboardPhotoDrawer />
             </TabPanel>
           </TabPanels>
         </Tabs>
