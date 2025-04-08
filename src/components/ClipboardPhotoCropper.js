@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import ReactCrop from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import {
@@ -20,6 +20,7 @@ function ClipboardPhotoCropper() {
   const [imageRef, setImageRef] = useState(null);
   const [imageSize, setImageSize] = useState(null);
   const toast = useToast();
+  const debounceTimeoutRef = useRef(null);
 
   const resetApp = useCallback(() => {
     setImage(null);
@@ -30,6 +31,7 @@ function ClipboardPhotoCropper() {
 
   const calculateImageSize = useCallback((canvas) => {
     return new Promise((resolve) => {
+      console.log('calculateImageSize');
       if (!canvas) {
         setImageSize(null);
         resolve(null);
@@ -118,10 +120,25 @@ function ClipboardPhotoCropper() {
     }
   }, [imageRef, crop, calculateImageSize]);
 
+  const debouncedUpdateImageSize = useCallback(() => {
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+    
+    debounceTimeoutRef.current = setTimeout(() => {
+      updateImageSize();
+    }, 200); // 200ms debounce
+  }, [updateImageSize]);
+
   // Update size when crop changes
   React.useEffect(() => {
-    updateImageSize();
-  }, [crop, updateImageSize]);
+    debouncedUpdateImageSize();
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, [crop, debouncedUpdateImageSize]);
 
   const saveToClipboard = useCallback(async () => {
     if (!imageRef || !crop) return;
