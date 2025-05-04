@@ -12,7 +12,9 @@ import {
   SliderTrack,
   SliderFilledTrack,
   SliderThumb,
+  Input,
 } from '@chakra-ui/react';
+import { useImageUpload } from '../utils/imageUpload';
 
 function ClipboardPhotoCropper() {
   const [image, setImage] = useState(null);
@@ -21,6 +23,9 @@ function ClipboardPhotoCropper() {
   const [imageSize, setImageSize] = useState(null);
   const toast = useToast();
   const debounceTimeoutRef = useRef(null);
+  
+  // Use the shared image upload hook
+  const { fileInputRef, handlePaste, renderFileUploadUI } = useImageUpload(setImage, setImageSize, toast);
 
   const resetApp = useCallback(() => {
     setImage(null);
@@ -50,33 +55,6 @@ function ClipboardPhotoCropper() {
       }, 'image/png');
     });
   }, []);
-
-  const handlePaste = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    const imageItem = Array.from(items).find(
-      item => item.type.indexOf('image') !== -1
-    );
-
-    if (imageItem) {
-      const blob = imageItem.getAsFile();
-      const url = URL.createObjectURL(blob);
-      setImage(url);
-      setImageSize((blob.size / (1024 * 1024)).toFixed(2));
-    } else {
-      toast({
-        title: 'Error',
-        description: 'No image found in clipboard',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
-    }
-  }, [toast]);
 
   const updateImageSize = useCallback(() => {
     if (!imageRef || !crop || !crop.width || !crop.height) {
@@ -280,7 +258,15 @@ function ClipboardPhotoCropper() {
               handlePaste(e);
             }}
           >
-            <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
+            <VStack spacing={4}>
+              <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
+              
+              <HStack>
+                <Text>Or</Text>
+              </HStack>
+              
+              {renderFileUploadUI()}
+            </VStack>
           </Box>
         )}
 

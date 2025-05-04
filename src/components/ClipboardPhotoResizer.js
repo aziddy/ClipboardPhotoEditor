@@ -11,6 +11,7 @@ import {
   SliderThumb,
   useToast,
 } from '@chakra-ui/react';
+import { useImageUpload } from '../utils/imageUpload';
 
 function ClipboardPhotoResizer() {
   const [image, setImage] = useState(null);
@@ -19,6 +20,32 @@ function ClipboardPhotoResizer() {
   const [fileSize, setFileSize] = useState(0);
   const [previewUrl, setPreviewUrl] = useState(null);
   const toast = useToast();
+
+  // Use the shared image upload hook
+  const { handlePaste, renderFileUploadUI } = useImageUpload(
+    // We need to handle image setting differently in this component
+    (url) => {
+      const img = new Image();
+      img.src = url;
+      img.onload = () => {
+        if (img.width < 10 || img.height < 10) {
+          toast({
+            title: 'Error',
+            description: 'Image dimensions must be at least 10x10 pixels',
+            status: 'error',
+            duration: 3000,
+          });
+          return;
+        }
+        
+        setImage(img);
+        setDimensions({ width: img.width, height: img.height });
+      };
+    }, 
+    // We set file size directly, not image size
+    (size) => setFileSize(parseFloat(size) * 1024 * 1024),
+    toast
+  );
 
   const resetApp = useCallback(() => {
     setImage(null);
@@ -32,44 +59,6 @@ function ClipboardPhotoResizer() {
       status: 'info',
       duration: 2000,
     });
-  }, [toast]);
-
-  const handlePaste = useCallback(async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const items = e.clipboardData.items;
-    const item = [...items].find(item => item.type.startsWith('image/'));
-    
-    if (!item) {
-      toast({
-        title: 'Error',
-        description: 'No image found in clipboard',
-        status: 'error',
-        duration: 3000,
-      });
-      return;
-    }
-
-    const file = item.getAsFile();
-    const img = new Image();
-    img.src = URL.createObjectURL(file);
-    
-    img.onload = () => {
-      if (img.width < 10 || img.height < 10) {
-        toast({
-          title: 'Error',
-          description: 'Image dimensions must be at least 10x10 pixels',
-          status: 'error',
-          duration: 3000,
-        });
-        return;
-      }
-      
-      setImage(img);
-      setDimensions({ width: img.width, height: img.height });
-      setFileSize(file.size);
-    };
   }, [toast]);
 
   const processImage = useCallback(() => {
@@ -229,7 +218,15 @@ function ClipboardPhotoResizer() {
         
         {!image && (
           <Box p={10} border="2px dashed" borderColor="gray.300" borderRadius="md" textAlign="center">
-            <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
+            <VStack spacing={4}>
+              <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
+              
+              <HStack>
+                <Text>Or</Text>
+              </HStack>
+              
+              {renderFileUploadUI()}
+            </VStack>
           </Box>
         )}
 

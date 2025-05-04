@@ -16,6 +16,7 @@ import {
   IconButton,
   Tooltip,
 } from '@chakra-ui/react';
+import { useImageUpload } from '../utils/imageUpload';
 
 function ClipboardPhotoDrawer() {
   const [image, setImage] = useState(null);
@@ -33,6 +34,8 @@ function ClipboardPhotoDrawer() {
   const contextRef = useRef(null);
   const toast = useToast();
 
+  // Use the shared image upload hook
+  const { fileInputRef, handlePaste, renderFileUploadUI } = useImageUpload(setImage, setImageSize, toast);
 
   const undo = useCallback(() => {
     if (currentHistoryIndex <= 0) return;
@@ -177,33 +180,6 @@ function ClipboardPhotoDrawer() {
     });
   }, []);
 
-  const handlePaste = useCallback((e) => {
-    e.preventDefault(); // Prevent default paste behavior
-    e.stopPropagation(); // Stop event from bubbling up
-    
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    const imageItem = Array.from(items).find(
-      item => item.type.indexOf('image') !== -1
-    );
-
-    if (imageItem) {
-      const blob = imageItem.getAsFile();
-      const url = URL.createObjectURL(blob);
-      setImage(url);
-      setImageSize((blob.size / (1024 * 1024)).toFixed(2));
-    } else {
-      toast({
-        title: 'Error',
-        description: 'No image found in clipboard',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
-    }
-  }, [toast]);
-
   const updateImageSize = useCallback(() => {
     if (!imageRef || !crop || !crop.width || !crop.height) {
       setImageSize(null);
@@ -318,7 +294,7 @@ function ClipboardPhotoDrawer() {
     }}>
       <VStack spacing={6} align="stretch">
         <Text fontSize="2xl" fontWeight="bold">
-          Photo Editor
+          Photo Drawer
         </Text>
         
         {!image && (
@@ -333,7 +309,15 @@ function ClipboardPhotoDrawer() {
               handlePaste(e);
             }}
           >
-            <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
+            <VStack spacing={4}>
+              <Text>Paste an image from your clipboard (Ctrl/Cmd + V)</Text>
+              
+              <HStack>
+                <Text>Or</Text>
+              </HStack>
+              
+              {renderFileUploadUI()}
+            </VStack>
           </Box>
         )}
 
