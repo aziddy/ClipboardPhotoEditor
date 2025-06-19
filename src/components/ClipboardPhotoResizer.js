@@ -10,14 +10,22 @@ import {
   SliderFilledTrack,
   SliderThumb,
   useToast,
+  Divider,
 } from '@chakra-ui/react';
 import { useImageUpload } from '../utils/imageUpload';
+import { 
+  copyToClipboard, 
+  downloadImage, 
+  getOutputSizes, 
+  createResizedCanvas 
+} from '../utils/imageExport';
 
 function ClipboardPhotoResizer() {
   const [image, setImage] = useState(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [scale, setScale] = useState(100);
-  const [fileSize, setFileSize] = useState(0);
+  const [outputSizes, setOutputSizes] = useState({ png: '0.00', jpg: '0.00' });
+  const [jpegQuality, setJpegQuality] = useState(90);
   const [previewUrl, setPreviewUrl] = useState(null);
   const toast = useToast();
 
@@ -42,8 +50,8 @@ function ClipboardPhotoResizer() {
         setDimensions({ width: img.width, height: img.height });
       };
     }, 
-    // We set file size directly, not image size
-    (size) => setFileSize(parseFloat(size) * 1024 * 1024),
+    // We don't need to set file size in the hook anymore
+    null,
     toast
   );
 
@@ -51,7 +59,7 @@ function ClipboardPhotoResizer() {
     setImage(null);
     setDimensions({ width: 0, height: 0 });
     setScale(100);
-    setFileSize(0);
+    setOutputSizes({ png: '0.00', jpg: '0.00' });
     setPreviewUrl(null);
     toast({
       title: 'Reset Complete',
@@ -61,28 +69,14 @@ function ClipboardPhotoResizer() {
     });
   }, [toast]);
 
-  const processImage = useCallback(() => {
-    if (!image) return null;
-    
-    const canvas = document.createElement('canvas');
-    const scaleFactor = scale / 100;
-    canvas.width = Math.round(dimensions.width * scaleFactor);
-    canvas.height = Math.round(dimensions.height * scaleFactor);
-    
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    
-    return canvas;
-  }, [image, dimensions, scale]);
-
-  // Update preview and file size whenever scale changes
+  // Update preview and output sizes whenever scale or quality changes
   React.useEffect(() => {
     let isCurrent = true;
     
-    const updatePreviewAndSize = async () => {
+    const updatePreviewAndSizes = async () => {
       if (!image) return;
       
-      const canvas = processImage();
+      const canvas = createResizedCanvas(image, dimensions, scale);
       if (!canvas) return;
 
       try {
@@ -92,121 +86,54 @@ function ClipboardPhotoResizer() {
           setPreviewUrl(newPreviewUrl);
         }
 
-        // Update file size
-        const blob = await new Promise((resolve) => {
-          canvas.toBlob(resolve, 'image/png');
-        });
-        
-        if (isCurrent && blob) {
-          setFileSize(blob.size);
+        // Update output sizes
+        const sizes = await getOutputSizes(canvas, jpegQuality / 100);
+        if (isCurrent) {
+          setOutputSizes(sizes);
         }
       } catch (err) {
-        console.error('Error updating preview and file size:', err);
+        console.error('Error updating preview and sizes:', err);
       }
     };
 
-    updatePreviewAndSize();
+    updatePreviewAndSizes();
     
     return () => {
       isCurrent = false;
     };
-  }, [scale, processImage, image]);
+  }, [scale, jpegQuality, image, dimensions]);
 
-  const copyToClipboard = useCallback(async () => {
-    const canvas = processImage();
-    if (!canvas) return;
-
-    try {
-      // Convert canvas to data URL
-      const dataUrl = canvas.toDataURL('image/png');
-      
-      // Create a temporary image element
-      const tempImg = document.createElement('img');
-      tempImg.src = dataUrl;
-      
-      // Wait for the image to load
-      await new Promise((resolve) => {
-        tempImg.onload = resolve;
-      });
-
-      try {
-        // Create a temporary canvas with the image
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = tempImg.width;
-        tempCanvas.height = tempImg.height;
-        const ctx = tempCanvas.getContext('2d');
-        ctx.drawImage(tempImg, 0, 0);
-        
-        // Try to copy to clipboard using the newer API
-        tempCanvas.toBlob(async (blob) => {
-          try {
-            await navigator.clipboard.write([
-              new ClipboardItem({
-                'image/png': blob
-              })
-            ]);
-            
-            toast({
-              title: 'Success',
-              description: 'Image copied to clipboard',
-              status: 'success',
-              duration: 2000,
-            });
-          } catch (clipError) {
-            // If modern API fails, try copying as PNG data URL
-            try {
-              const pngDataUrl = tempCanvas.toDataURL('image/png');
-              await navigator.clipboard.writeText(pngDataUrl);
-              
-              toast({
-                title: 'Success',
-                description: 'Image copied as data URL',
-                status: 'success',
-                duration: 2000,
-              });
-            } catch (textError) {
-              // If all clipboard methods fail, offer download
-              const url = URL.createObjectURL(blob);
-              const link = document.createElement('a');
-              link.href = url;
-              link.download = 'edited-image.png';
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-              URL.revokeObjectURL(url);
-              
-              toast({
-                title: 'Clipboard Access Denied',
-                description: 'Image has been downloaded instead. Your browser may be restricting clipboard access.',
-                status: 'warning',
-                duration: 5000,
-              });
-            }
-          }
-        }, 'image/png');
-      } catch (err) {
-        throw new Error('Failed to process image for clipboard');
-      }
-    } catch (err) {
-      console.error('Clipboard error:', err);
-      toast({
-        title: 'Error',
-        description: 'Failed to copy to clipboard. Your browser may be restricting clipboard access.',
-        status: 'error',
-        duration: 3000,
-      });
+  const handleCopyToPNG = useCallback(async () => {
+    if (!image) return;
+    const canvas = createResizedCanvas(image, dimensions, scale);
+    if (canvas) {
+      await copyToClipboard(canvas, 'image/png', 1, toast);
     }
-  }, [processImage, toast]);
+  }, [image, dimensions, scale, toast]);
 
-  const downloadAsPNG = useCallback(async () => {
-    const canvas = processImage();
-    if (!canvas) return;
+  const handleCopyToJPG = useCallback(async () => {
+    if (!image) return;
+    const canvas = createResizedCanvas(image, dimensions, scale);
+    if (canvas) {
+      await copyToClipboard(canvas, 'image/jpeg', jpegQuality / 100, toast);
+    }
+  }, [image, dimensions, scale, jpegQuality, toast]);
 
-    const link = document.createElement('a');
-    link.download = 'edited-image.png';
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  }, [processImage]);
+  const handleDownloadPNG = useCallback(async () => {
+    if (!image) return;
+    const canvas = createResizedCanvas(image, dimensions, scale);
+    if (canvas) {
+      await downloadImage(canvas, 'image/png', 1, 'resized-image', toast);
+    }
+  }, [image, dimensions, scale, toast]);
+
+  const handleDownloadJPEG = useCallback(async () => {
+    if (!image) return;
+    const canvas = createResizedCanvas(image, dimensions, scale);
+    if (canvas) {
+      await downloadImage(canvas, 'image/jpeg', jpegQuality / 100, 'resized-image', toast);
+    }
+  }, [image, dimensions, scale, jpegQuality, toast]);
 
   return (
     <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
@@ -261,9 +188,21 @@ function ClipboardPhotoResizer() {
                 </Slider>
               </HStack>
 
-              <HStack w="100%" justify="space-between">
-                <Text>Output Size:</Text>
-                <Text>{(fileSize / (1024 * 1024)).toFixed(2)} MB</Text>
+              <HStack w="100%" justify="space-between" align="center">
+                <Text>JPEG Quality:</Text>
+                <Slider
+                  value={jpegQuality}
+                  onChange={setJpegQuality}
+                  min={10}
+                  max={100}
+                  width="200px"
+                >
+                  <SliderTrack>
+                    <SliderFilledTrack />
+                  </SliderTrack>
+                  <SliderThumb />
+                </Slider>
+                <Text>{jpegQuality}%</Text>
               </HStack>
 
               <HStack w="100%" justify="space-between">
@@ -273,29 +212,69 @@ function ClipboardPhotoResizer() {
                 </Text>
               </HStack>
 
-              <HStack w="100%" spacing={4}>
-                <Button 
-                  colorScheme="red" 
-                  onClick={resetApp}
-                  flex={1}
-                >
-                  Reset
-                </Button>
-                <Button 
-                  colorScheme="blue" 
-                  onClick={copyToClipboard} 
-                  flex={1}
-                >
-                  Copy to Clipboard
-                </Button>
-                <Button 
-                  colorScheme="green" 
-                  onClick={downloadAsPNG} 
-                  flex={1}
-                >
-                  Download as PNG
-                </Button>
-              </HStack>
+              <Divider />
+
+              <VStack w="100%" spacing={2}>
+                <Text fontWeight="bold">Output Sizes:</Text>
+                <HStack w="100%" justify="space-between">
+                  <Text>PNG:</Text>
+                  <Text>{outputSizes.png} MB</Text>
+                </HStack>
+                <HStack w="100%" justify="space-between">
+                  <Text>JPG:</Text>
+                  <Text>{outputSizes.jpg} MB</Text>
+                </HStack>
+              </VStack>
+
+              <Divider />
+
+              <VStack w="100%" spacing={3}>
+                <Text fontWeight="bold">Copy to Clipboard:</Text>
+                <HStack w="100%" spacing={4}>
+                  <Button 
+                    colorScheme="blue" 
+                    onClick={handleCopyToPNG}
+                    flex={1}
+                  >
+                    Copy as PNG
+                  </Button>
+                  <Button 
+                    colorScheme="orange" 
+                    onClick={handleCopyToJPG}
+                    flex={1}
+                  >
+                    Copy as JPG
+                  </Button>
+                </HStack>
+              </VStack>
+
+              <VStack w="100%" spacing={3}>
+                <Text fontWeight="bold">Download:</Text>
+                <HStack w="100%" spacing={4}>
+                  <Button 
+                    colorScheme="green" 
+                    onClick={handleDownloadPNG}
+                    flex={1}
+                  >
+                    Download PNG
+                  </Button>
+                  <Button 
+                    colorScheme="purple" 
+                    onClick={handleDownloadJPEG}
+                    flex={1}
+                  >
+                    Download JPEG
+                  </Button>
+                </HStack>
+              </VStack>
+
+              <Button 
+                colorScheme="red" 
+                onClick={resetApp}
+                w="100%"
+              >
+                Reset
+              </Button>
             </VStack>
           </>
         )}

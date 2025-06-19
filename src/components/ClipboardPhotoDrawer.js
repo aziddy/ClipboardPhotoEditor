@@ -15,14 +15,21 @@ import {
   Input,
   IconButton,
   Tooltip,
+  Divider,
 } from '@chakra-ui/react';
 import { useImageUpload } from '../utils/imageUpload';
+import { 
+  copyToClipboard, 
+  downloadImage, 
+  getOutputSizes 
+} from '../utils/imageExport';
 
 function ClipboardPhotoDrawer() {
   const [image, setImage] = useState(null);
   const [crop, setCrop] = useState();
   const [imageRef, setImageRef] = useState(null);
-  const [imageSize, setImageSize] = useState(null);
+  const [outputSizes, setOutputSizes] = useState({ png: '0.00', jpg: '0.00' });
+  const [jpegQuality, setJpegQuality] = useState(90);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawingColor, setDrawingColor] = useState('#FF0000');
   const [strokeSize, setStrokeSize] = useState(5);
@@ -35,7 +42,7 @@ function ClipboardPhotoDrawer() {
   const toast = useToast();
 
   // Use the shared image upload hook
-  const { fileInputRef, handlePaste, renderFileUploadUI } = useImageUpload(setImage, setImageSize, toast);
+  const { fileInputRef, handlePaste, renderFileUploadUI } = useImageUpload(setImage, null, toast);
 
   const undo = useCallback(() => {
     if (currentHistoryIndex <= 0) return;
@@ -80,6 +87,7 @@ function ClipboardPhotoDrawer() {
         context.strokeStyle = isEraser ? '#ffffff' : drawingColor;
         context.lineWidth = strokeSize;
         saveToHistory();
+        updateOutputSizes();
       };
     }
   }, [image]);
@@ -114,6 +122,25 @@ function ClipboardPhotoDrawer() {
     setCurrentHistoryIndex(newHistory.length - 1);
   }, [drawingHistory, currentHistoryIndex]);
 
+  const updateOutputSizes = useCallback(async () => {
+    if (!canvasRef.current) {
+      setOutputSizes({ png: '0.00', jpg: '0.00' });
+      return;
+    }
+
+    try {
+      const sizes = await getOutputSizes(canvasRef.current, jpegQuality / 100);
+      setOutputSizes(sizes);
+    } catch (err) {
+      setOutputSizes({ png: '0.00', jpg: '0.00' });
+      console.error('Error updating output sizes:', err);
+    }
+  }, [jpegQuality]);
+
+  // Update sizes when quality changes
+  useEffect(() => {
+    updateOutputSizes();
+  }, [jpegQuality, updateOutputSizes]);
 
   const startDrawing = useCallback((e) => {
     const canvas = canvasRef.current;
@@ -144,13 +171,14 @@ function ClipboardPhotoDrawer() {
     contextRef.current.closePath();
     setIsDrawing(false);
     saveToHistory();
-  }, [isDrawing, saveToHistory]);
+    updateOutputSizes();
+  }, [isDrawing, saveToHistory, updateOutputSizes]);
 
   const resetApp = useCallback(() => {
     setImage(null);
     setCrop(undefined);
     setImageRef(null);
-    setImageSize(null);
+    setOutputSizes({ png: '0.00', jpg: '0.00' });
     setIsDrawing(false);
     setDrawingColor('#FF0000');
     setStrokeSize(5);
@@ -159,133 +187,25 @@ function ClipboardPhotoDrawer() {
     setCurrentHistoryIndex(-1);
   }, []);
 
-  const calculateImageSize = useCallback((canvas) => {
-    return new Promise((resolve) => {
-      if (!canvas) {
-        setImageSize(null);
-        resolve(null);
-        return;
-      }
-      
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          setImageSize(null);
-          resolve(null);
-          return;
-        }
-        const sizeInMB = (blob.size / (1024 * 1024)).toFixed(2);
-        setImageSize(sizeInMB);
-        resolve(blob);
-      }, 'image/png');
-    });
-  }, []);
-
-  const updateImageSize = useCallback(() => {
-    if (!imageRef || !crop || !crop.width || !crop.height) {
-      setImageSize(null);
-      return;
-    }
-
-    try {
-      const canvas = document.createElement('canvas');
-      const scaleX = imageRef.naturalWidth / imageRef.width;
-      const scaleY = imageRef.naturalHeight / imageRef.height;
-
-      const outputWidth = Math.round(crop.width * scaleX);
-      const outputHeight = Math.round(crop.height * scaleY);
-
-      canvas.width = outputWidth;
-      canvas.height = outputHeight;
-      const ctx = canvas.getContext('2d');
-
-      if (!ctx) {
-        setImageSize(null);
-        return;
-      }
-
-      ctx.drawImage(
-        imageRef,
-        crop.x * scaleX,
-        crop.y * scaleY,
-        crop.width * scaleX,
-        crop.height * scaleY,
-        0,
-        0,
-        outputWidth,
-        outputHeight
-      );
-
-      calculateImageSize(canvas);
-    } catch (err) {
-      setImageSize(null);
-      console.error('Error updating image size:', err);
-    }
-  }, [imageRef, crop, calculateImageSize]);
-
-  // Update size when crop changes
-  React.useEffect(() => {
-    updateImageSize();
-  }, [crop, updateImageSize]);
-
-  // Modify saveToClipboard to use canvas content
-  const saveToClipboard = useCallback(async () => {
+  const handleCopyToPNG = useCallback(async () => {
     if (!canvasRef.current) return;
-
-    try {
-      const blob = await new Promise(resolve => canvasRef.current.toBlob(resolve, 'image/png'));
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'image/png': blob
-        })
-      ]);
-      toast({
-        title: 'Success',
-        description: 'Image saved to clipboard',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      });
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: 'Failed to save image to clipboard',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
-    }
+    await copyToClipboard(canvasRef.current, 'image/png', 1, toast);
   }, [toast]);
 
-  // Modify downloadImage to use canvas content
-  const downloadImage = useCallback(async () => {
+  const handleCopyToJPG = useCallback(async () => {
     if (!canvasRef.current) return;
+    await copyToClipboard(canvasRef.current, 'image/jpeg', jpegQuality / 100, toast);
+  }, [jpegQuality, toast]);
 
-    try {
-      const url = canvasRef.current.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'edited-image.png';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      toast({
-        title: 'Success',
-        description: 'Image downloaded successfully',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      });
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: 'Failed to download image',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
-    }
+  const handleDownloadPNG = useCallback(async () => {
+    if (!canvasRef.current) return;
+    await downloadImage(canvasRef.current, 'image/png', 1, 'drawn-image', toast);
   }, [toast]);
+
+  const handleDownloadJPEG = useCallback(async () => {
+    if (!canvasRef.current) return;
+    await downloadImage(canvasRef.current, 'image/jpeg', jpegQuality / 100, 'drawn-image', toast);
+  }, [jpegQuality, toast]);
 
   return (
     <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
@@ -370,6 +290,39 @@ function ClipboardPhotoDrawer() {
                 <Text>{strokeSize}px</Text>
               </HStack>
 
+              <HStack w="100%" justify="space-between" align="center">
+                <Text>JPEG Quality:</Text>
+                <Slider
+                  value={jpegQuality}
+                  onChange={setJpegQuality}
+                  min={10}
+                  max={100}
+                  width="200px"
+                >
+                  <SliderTrack>
+                    <SliderFilledTrack />
+                  </SliderTrack>
+                  <SliderThumb />
+                </Slider>
+                <Text>{jpegQuality}%</Text>
+              </HStack>
+
+              <Divider />
+
+              <VStack w="100%" spacing={2}>
+                <Text fontWeight="bold">Output Sizes:</Text>
+                <HStack w="100%" justify="space-between">
+                  <Text>PNG:</Text>
+                  <Text>{outputSizes.png} MB</Text>
+                </HStack>
+                <HStack w="100%" justify="space-between">
+                  <Text>JPG:</Text>
+                  <Text>{outputSizes.jpg} MB</Text>
+                </HStack>
+              </VStack>
+
+              <Divider />
+
               <HStack w="100%" spacing={4}>
                 <Button
                   colorScheme={isEraser ? 'pink' : 'blue'}
@@ -388,29 +341,53 @@ function ClipboardPhotoDrawer() {
                 </Button>
               </HStack>
 
-              <HStack w="100%" spacing={4}>
-                <Button 
-                  colorScheme="red" 
-                  onClick={resetApp}
-                  flex={1}
-                >
-                  Reset
-                </Button>
-                <Button 
-                  colorScheme="blue" 
-                  onClick={saveToClipboard}
-                  flex={1}
-                >
-                  Copy to Clipboard
-                </Button>
-                <Button 
-                  colorScheme="green" 
-                  onClick={downloadImage}
-                  flex={1}
-                >
-                  Download as PNG
-                </Button>
-              </HStack>
+              <VStack w="100%" spacing={3}>
+                <Text fontWeight="bold">Copy to Clipboard:</Text>
+                <HStack w="100%" spacing={4}>
+                  <Button 
+                    colorScheme="blue" 
+                    onClick={handleCopyToPNG}
+                    flex={1}
+                  >
+                    Copy as PNG
+                  </Button>
+                  <Button 
+                    colorScheme="orange" 
+                    onClick={handleCopyToJPG}
+                    flex={1}
+                  >
+                    Copy as JPG
+                  </Button>
+                </HStack>
+              </VStack>
+
+              <VStack w="100%" spacing={3}>
+                <Text fontWeight="bold">Download:</Text>
+                <HStack w="100%" spacing={4}>
+                  <Button 
+                    colorScheme="green" 
+                    onClick={handleDownloadPNG}
+                    flex={1}
+                  >
+                    Download PNG
+                  </Button>
+                  <Button 
+                    colorScheme="purple" 
+                    onClick={handleDownloadJPEG}
+                    flex={1}
+                  >
+                    Download JPEG
+                  </Button>
+                </HStack>
+              </VStack>
+
+              <Button 
+                colorScheme="red" 
+                onClick={resetApp}
+                w="100%"
+              >
+                Reset
+              </Button>
             </VStack>
           </VStack>
         )}
