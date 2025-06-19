@@ -133,3 +133,4 @@ dist
 /build
 
 /.cert
+/*.DS_Store
