@@ -48,7 +48,8 @@ export const copyToClipboard = async (canvas, format = 'image/png', quality = 0.
   }
 
   try {
-    const { blob } = await calculateImageSize(canvas, format, quality);
+    // Always use PNG for clipboard operations as browsers only support PNG
+    const { blob } = await calculateImageSize(canvas, 'image/png');
     
     if (!blob) {
       throw new Error('Failed to create image blob');
@@ -56,7 +57,7 @@ export const copyToClipboard = async (canvas, format = 'image/png', quality = 0.
 
     await navigator.clipboard.write([
       new ClipboardItem({
-        [format]: blob
+        'image/png': blob
       })
     ]);
     

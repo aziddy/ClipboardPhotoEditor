@@ -5,6 +5,7 @@ import {
   Text,
   HStack,
   Divider,
+  Tooltip,
 } from '@chakra-ui/react';
 import { 
   copyToClipboard, 
@@ -142,14 +143,22 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
           >
             Copy as PNG
           </Button>
-          <Button 
-            color="white" 
-            bg="blue.300"
-            onClick={handleCopyToJPG}
-            flex={1}
+          <Tooltip 
+            label="Browsers only support PNG format for clipboard operations" 
+            placement="top"
+            hasArrow
           >
-            Copy as JPEG
-          </Button>
+            <Button 
+              color="white" 
+              bg="blue.300"
+              onClick={handleCopyToJPG}
+              flex={1}
+              isDisabled={true}
+              opacity={0.6}
+            >
+              Copy as JPEG
+            </Button>
+          </Tooltip>
         </HStack>
       </VStack>
 
@@ -165,7 +174,7 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
           </Button>
           <Button 
             color="white" 
-            bg="green.300"
+            bg="green.400"
             onClick={handleDownloadJPEG}
             flex={1}
           >
