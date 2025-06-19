@@ -78,6 +78,7 @@ function ClipboardPhotoResizer() {
   // Update preview and output sizes whenever scale changes
   React.useEffect(() => {
     let isCurrent = true;
+    let timeoutId = null;
     
     const updatePreviewAndSizes = async () => {
       if (!image) return;
@@ -99,10 +100,21 @@ function ClipboardPhotoResizer() {
       }
     };
 
-    updatePreviewAndSizes();
+    // Clear any existing timeout
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+
+    // Set a new timeout with 100ms delay
+    timeoutId = setTimeout(() => {
+      updatePreviewAndSizes();
+    }, 200);
     
     return () => {
       isCurrent = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, [scale, image, dimensions, updateOutputSizes]);
 

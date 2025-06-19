@@ -29,7 +29,7 @@ function ClipboardPhotoCropper() {
   }, [imageRef, crop]);
 
   // Use the export controls hook
-  const { updateOutputSizes, resetExportState, ExportControls } = useImageExportControls(
+  const { updateOutputSizes, debouncedUpdateOutputSizes, resetExportState, ExportControls } = useImageExportControls(
     getCanvas,
     toast,
     'cropped'
@@ -45,7 +45,7 @@ function ClipboardPhotoCropper() {
     resetExportState();
   }, [resetExportState]);
 
-  const debouncedUpdateOutputSizes = useCallback(() => {
+  const debouncedUpdateForCrop = useCallback(() => {
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current);
     }
@@ -57,13 +57,13 @@ function ClipboardPhotoCropper() {
 
   // Update sizes when crop changes
   React.useEffect(() => {
-    debouncedUpdateOutputSizes();
+    debouncedUpdateForCrop();
     return () => {
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [crop, debouncedUpdateOutputSizes]);
+  }, [crop, debouncedUpdateForCrop]);
 
   return (
     <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {

@@ -4,10 +4,6 @@ import {
   VStack,
   Text,
   HStack,
-  Slider,
-  SliderTrack,
-  SliderFilledTrack,
-  SliderThumb,
   Divider,
 } from '@chakra-ui/react';
 import { 
@@ -15,6 +11,7 @@ import {
   downloadImage, 
   getOutputSizes 
 } from './imageExport';
+import QualitySlider from './QualitySlider';
 
 /**
  * Custom hook that provides image export functionality and UI components
@@ -92,94 +89,78 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
     setJpegQuality(90);
   }, []);
 
+  // Quality change handler
+  const handleQualityChange = useCallback((newQuality) => {
+    setJpegQuality(newQuality);
+  }, []);
+
   // UI Components
-  const QualitySlider = useCallback(() => (
-    <HStack w="100%" justify="space-between" align="center">
-      <Text>JPEG Quality:</Text>
-      <Slider
-        value={jpegQuality}
-        onChange={setJpegQuality}
-        min={10}
-        max={100}
-        width="200px"
-      >
-        <SliderTrack>
-          <SliderFilledTrack />
-        </SliderTrack>
-        <SliderThumb />
-      </Slider>
-      <Text>{jpegQuality}%</Text>
-    </HStack>
-  ), [jpegQuality]);
-
-  const OutputSizesDisplay = useCallback(() => (
-    <VStack w="100%" spacing={2}>
-      <Text fontWeight="bold">Output Sizes:</Text>
-      <HStack w="100%" justify="space-between">
-        <Text>PNG:</Text>
-        <Text>{outputSizes.png} MB</Text>
-      </HStack>
-      <HStack w="100%" justify="space-between">
-        <Text>JPG:</Text>
-        <Text>{outputSizes.jpg} MB</Text>
-      </HStack>
-    </VStack>
-  ), [outputSizes]);
-
-  const CopyButtons = useCallback(() => (
-    <VStack w="100%" spacing={3}>
-      <Text fontWeight="bold">Copy to Clipboard:</Text>
-      <HStack w="100%" spacing={4}>
-        <Button 
-          colorScheme="blue" 
-          onClick={handleCopyToPNG}
-          flex={1}
-        >
-          Copy as PNG
-        </Button>
-        <Button 
-          colorScheme="orange" 
-          onClick={handleCopyToJPG}
-          flex={1}
-        >
-          Copy as JPG
-        </Button>
-      </HStack>
-    </VStack>
-  ), [handleCopyToPNG, handleCopyToJPG]);
-
-  const DownloadButtons = useCallback(() => (
-    <VStack w="100%" spacing={3}>
-      <Text fontWeight="bold">Download:</Text>
-      <HStack w="100%" spacing={4}>
-        <Button 
-          colorScheme="green" 
-          onClick={handleDownloadPNG}
-          flex={1}
-        >
-          Download PNG
-        </Button>
-        <Button 
-          colorScheme="purple" 
-          onClick={handleDownloadJPEG}
-          flex={1}
-        >
-          Download JPEG
-        </Button>
-      </HStack>
-    </VStack>
-  ), [handleDownloadPNG, handleDownloadJPEG]);
-
-  const ExportControls = useCallback(() => (
+  const ExportControls = () => (
     <>
-      <QualitySlider />
+      <QualitySlider 
+        initialValue={jpegQuality}
+        onQualityChange={handleQualityChange}
+      />
+
       <Divider />
-      <OutputSizesDisplay />
+
+      <VStack w="100%" spacing={2}>
+        <Text fontWeight="bold">Output Sizes:</Text>
+        <HStack w="100%" justify="space-between">
+          <Text>PNG:</Text>
+          <Text>{outputSizes.png} MB</Text>
+        </HStack>
+        <HStack w="100%" justify="space-between">
+          <Text>JPG:</Text>
+          <Text>{outputSizes.jpg} MB</Text>
+        </HStack>
+      </VStack>
+
       <Divider />
-      <CopyButtons />
-      <DownloadButtons />
+
+      <VStack w="100%" spacing={3}>
+        {/* <Text fontWeight="bold">Copy to Clipboard:</Text> */}
+        <HStack w="100%" spacing={4}>
+          <Button 
+            colorScheme="blue" 
+            onClick={handleCopyToPNG}
+            flex={1}
+          >
+            Copy as PNG
+          </Button>
+          <Button 
+            color="white" 
+            bg="blue.300"
+            onClick={handleCopyToJPG}
+            flex={1}
+          >
+            Copy as JPEG
+          </Button>
+        </HStack>
+      </VStack>
+
+      <VStack w="100%" spacing={3}>
+        {/* <Text fontWeight="bold">Download:</Text> */}
+        <HStack w="100%" spacing={4}>
+          <Button 
+            colorScheme="green" 
+            onClick={handleDownloadPNG}
+            flex={1}
+          >
+            Download PNG
+          </Button>
+          <Button 
+            color="white" 
+            bg="green.300"
+            onClick={handleDownloadJPEG}
+            flex={1}
+          >
+            Download JPEG
+          </Button>
+        </HStack>
+      </VStack>
     </>
-  ), [QualitySlider, OutputSizesDisplay, CopyButtons, DownloadButtons]);
+  );
 
   return {
     // State
@@ -196,10 +177,6 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
     handleDownloadJPEG,
     
     // UI Components
-    QualitySlider,
-    OutputSizesDisplay,
-    CopyButtons,
-    DownloadButtons,
-    ExportControls, // Complete export controls section
+    ExportControls,
   };
 }; 
