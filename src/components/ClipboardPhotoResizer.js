@@ -10,24 +10,30 @@ import {
   SliderFilledTrack,
   SliderThumb,
   useToast,
-  Divider,
 } from '@chakra-ui/react';
 import { useImageUpload } from '../utils/imageUpload';
-import { 
-  copyToClipboard, 
-  downloadImage, 
-  getOutputSizes, 
-  createResizedCanvas 
-} from '../utils/imageExport';
+import { createResizedCanvas } from '../utils/imageExport';
+import { useImageExportControls } from '../utils/useImageExportControls';
 
 function ClipboardPhotoResizer() {
   const [image, setImage] = useState(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [scale, setScale] = useState(100);
-  const [outputSizes, setOutputSizes] = useState({ png: '0.00', jpg: '0.00' });
-  const [jpegQuality, setJpegQuality] = useState(90);
   const [previewUrl, setPreviewUrl] = useState(null);
   const toast = useToast();
+
+  // Canvas source function for the export hook
+  const getCanvas = useCallback(() => {
+    if (!image) return null;
+    return createResizedCanvas(image, dimensions, scale);
+  }, [image, dimensions, scale]);
+
+  // Use the export controls hook
+  const { updateOutputSizes, resetExportState, ExportControls } = useImageExportControls(
+    getCanvas,
+    toast,
+    'resized'
+  );
 
   // Use the shared image upload hook
   const { handlePaste, renderFileUploadUI } = useImageUpload(
@@ -59,17 +65,17 @@ function ClipboardPhotoResizer() {
     setImage(null);
     setDimensions({ width: 0, height: 0 });
     setScale(100);
-    setOutputSizes({ png: '0.00', jpg: '0.00' });
     setPreviewUrl(null);
+    resetExportState();
     toast({
       title: 'Reset Complete',
       description: 'Ready for a new image',
       status: 'info',
       duration: 2000,
     });
-  }, [toast]);
+  }, [resetExportState, toast]);
 
-  // Update preview and output sizes whenever scale or quality changes
+  // Update preview and output sizes whenever scale changes
   React.useEffect(() => {
     let isCurrent = true;
     
@@ -87,10 +93,7 @@ function ClipboardPhotoResizer() {
         }
 
         // Update output sizes
-        const sizes = await getOutputSizes(canvas, jpegQuality / 100);
-        if (isCurrent) {
-          setOutputSizes(sizes);
-        }
+        updateOutputSizes();
       } catch (err) {
         console.error('Error updating preview and sizes:', err);
       }
@@ -101,39 +104,7 @@ function ClipboardPhotoResizer() {
     return () => {
       isCurrent = false;
     };
-  }, [scale, jpegQuality, image, dimensions]);
-
-  const handleCopyToPNG = useCallback(async () => {
-    if (!image) return;
-    const canvas = createResizedCanvas(image, dimensions, scale);
-    if (canvas) {
-      await copyToClipboard(canvas, 'image/png', 1, toast);
-    }
-  }, [image, dimensions, scale, toast]);
-
-  const handleCopyToJPG = useCallback(async () => {
-    if (!image) return;
-    const canvas = createResizedCanvas(image, dimensions, scale);
-    if (canvas) {
-      await copyToClipboard(canvas, 'image/jpeg', jpegQuality / 100, toast);
-    }
-  }, [image, dimensions, scale, jpegQuality, toast]);
-
-  const handleDownloadPNG = useCallback(async () => {
-    if (!image) return;
-    const canvas = createResizedCanvas(image, dimensions, scale);
-    if (canvas) {
-      await downloadImage(canvas, 'image/png', 1, 'resized-image', toast);
-    }
-  }, [image, dimensions, scale, toast]);
-
-  const handleDownloadJPEG = useCallback(async () => {
-    if (!image) return;
-    const canvas = createResizedCanvas(image, dimensions, scale);
-    if (canvas) {
-      await downloadImage(canvas, 'image/jpeg', jpegQuality / 100, 'resized-image', toast);
-    }
-  }, [image, dimensions, scale, jpegQuality, toast]);
+  }, [scale, image, dimensions, updateOutputSizes]);
 
   return (
     <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
@@ -188,23 +159,6 @@ function ClipboardPhotoResizer() {
                 </Slider>
               </HStack>
 
-              <HStack w="100%" justify="space-between" align="center">
-                <Text>JPEG Quality:</Text>
-                <Slider
-                  value={jpegQuality}
-                  onChange={setJpegQuality}
-                  min={10}
-                  max={100}
-                  width="200px"
-                >
-                  <SliderTrack>
-                    <SliderFilledTrack />
-                  </SliderTrack>
-                  <SliderThumb />
-                </Slider>
-                <Text>{jpegQuality}%</Text>
-              </HStack>
-
               <HStack w="100%" justify="space-between">
                 <Text>Dimensions:</Text>
                 <Text>
@@ -212,61 +166,7 @@ function ClipboardPhotoResizer() {
                 </Text>
               </HStack>
 
-              <Divider />
-
-              <VStack w="100%" spacing={2}>
-                <Text fontWeight="bold">Output Sizes:</Text>
-                <HStack w="100%" justify="space-between">
-                  <Text>PNG:</Text>
-                  <Text>{outputSizes.png} MB</Text>
-                </HStack>
-                <HStack w="100%" justify="space-between">
-                  <Text>JPG:</Text>
-                  <Text>{outputSizes.jpg} MB</Text>
-                </HStack>
-              </VStack>
-
-              <Divider />
-
-              <VStack w="100%" spacing={3}>
-                <Text fontWeight="bold">Copy to Clipboard:</Text>
-                <HStack w="100%" spacing={4}>
-                  <Button 
-                    colorScheme="blue" 
-                    onClick={handleCopyToPNG}
-                    flex={1}
-                  >
-                    Copy as PNG
-                  </Button>
-                  <Button 
-                    colorScheme="orange" 
-                    onClick={handleCopyToJPG}
-                    flex={1}
-                  >
-                    Copy as JPG
-                  </Button>
-                </HStack>
-              </VStack>
-
-              <VStack w="100%" spacing={3}>
-                <Text fontWeight="bold">Download:</Text>
-                <HStack w="100%" spacing={4}>
-                  <Button 
-                    colorScheme="green" 
-                    onClick={handleDownloadPNG}
-                    flex={1}
-                  >
-                    Download PNG
-                  </Button>
-                  <Button 
-                    colorScheme="purple" 
-                    onClick={handleDownloadJPEG}
-                    flex={1}
-                  >
-                    Download JPEG
-                  </Button>
-                </HStack>
-              </VStack>
+              <ExportControls />
 
               <Button 
                 colorScheme="red" 

@@ -8,30 +8,33 @@ import {
   Text,
   useToast,
   HStack,
-  Slider,
-  SliderTrack,
-  SliderFilledTrack,
-  SliderThumb,
-  Input,
-  Divider,
 } from '@chakra-ui/react';
 import { useImageUpload } from '../utils/imageUpload';
-import { 
-  copyToClipboard, 
-  downloadImage, 
-  getOutputSizes, 
-  createCroppedCanvas 
-} from '../utils/imageExport';
+import { createCroppedCanvas } from '../utils/imageExport';
+import { useImageExportControls } from '../utils/useImageExportControls';
 
 function ClipboardPhotoCropper() {
   const [image, setImage] = useState(null);
   const [crop, setCrop] = useState();
   const [imageRef, setImageRef] = useState(null);
-  const [outputSizes, setOutputSizes] = useState({ png: '0.00', jpg: '0.00' });
-  const [jpegQuality, setJpegQuality] = useState(90);
   const toast = useToast();
   const debounceTimeoutRef = useRef(null);
-  
+
+  // Canvas source function for the export hook
+  const getCanvas = useCallback(() => {
+    if (!imageRef || !crop || !crop.width || !crop.height) {
+      return null;
+    }
+    return createCroppedCanvas(imageRef, crop);
+  }, [imageRef, crop]);
+
+  // Use the export controls hook
+  const { updateOutputSizes, resetExportState, ExportControls } = useImageExportControls(
+    getCanvas,
+    toast,
+    'cropped'
+  );
+
   // Use the shared image upload hook  
   const { fileInputRef, handlePaste, renderFileUploadUI } = useImageUpload(setImage, null, toast);
 
@@ -39,29 +42,8 @@ function ClipboardPhotoCropper() {
     setImage(null);
     setCrop(undefined);
     setImageRef(null);
-    setOutputSizes({ png: '0.00', jpg: '0.00' });
-  }, []);
-
-  const updateOutputSizes = useCallback(async () => {
-    if (!imageRef || !crop || !crop.width || !crop.height) {
-      setOutputSizes({ png: '0.00', jpg: '0.00' });
-      return;
-    }
-
-    try {
-      const canvas = createCroppedCanvas(imageRef, crop);
-      if (!canvas) {
-        setOutputSizes({ png: '0.00', jpg: '0.00' });
-        return;
-      }
-
-      const sizes = await getOutputSizes(canvas, jpegQuality / 100);
-      setOutputSizes(sizes);
-    } catch (err) {
-      setOutputSizes({ png: '0.00', jpg: '0.00' });
-      console.error('Error updating output sizes:', err);
-    }
-  }, [imageRef, crop, jpegQuality]);
+    resetExportState();
+  }, [resetExportState]);
 
   const debouncedUpdateOutputSizes = useCallback(() => {
     if (debounceTimeoutRef.current) {
@@ -73,7 +55,7 @@ function ClipboardPhotoCropper() {
     }, 200); // 200ms debounce
   }, [updateOutputSizes]);
 
-  // Update sizes when crop or quality changes
+  // Update sizes when crop changes
   React.useEffect(() => {
     debouncedUpdateOutputSizes();
     return () => {
@@ -81,39 +63,7 @@ function ClipboardPhotoCropper() {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [crop, jpegQuality, debouncedUpdateOutputSizes]);
-
-  const handleCopyToPNG = useCallback(async () => {
-    if (!imageRef || !crop) return;
-    const canvas = createCroppedCanvas(imageRef, crop);
-    if (canvas) {
-      await copyToClipboard(canvas, 'image/png', 1, toast);
-    }
-  }, [imageRef, crop, toast]);
-
-  const handleCopyToJPG = useCallback(async () => {
-    if (!imageRef || !crop) return;
-    const canvas = createCroppedCanvas(imageRef, crop);
-    if (canvas) {
-      await copyToClipboard(canvas, 'image/jpeg', jpegQuality / 100, toast);
-    }
-  }, [imageRef, crop, jpegQuality, toast]);
-
-  const handleDownloadPNG = useCallback(async () => {
-    if (!imageRef || !crop) return;
-    const canvas = createCroppedCanvas(imageRef, crop);
-    if (canvas) {
-      await downloadImage(canvas, 'image/png', 1, 'cropped-image', toast);
-    }
-  }, [imageRef, crop, toast]);
-
-  const handleDownloadJPEG = useCallback(async () => {
-    if (!imageRef || !crop) return;
-    const canvas = createCroppedCanvas(imageRef, crop);
-    if (canvas) {
-      await downloadImage(canvas, 'image/jpeg', jpegQuality / 100, 'cropped-image', toast);
-    }
-  }, [imageRef, crop, jpegQuality, toast]);
+  }, [crop, debouncedUpdateOutputSizes]);
 
   return (
     <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
@@ -169,78 +119,7 @@ function ClipboardPhotoCropper() {
             </Box>
 
             <VStack w="100%" spacing={4}>
-              <HStack w="100%" justify="space-between" align="center">
-                <Text>JPEG Quality:</Text>
-                <Slider
-                  value={jpegQuality}
-                  onChange={setJpegQuality}
-                  min={10}
-                  max={100}
-                  width="200px"
-                >
-                  <SliderTrack>
-                    <SliderFilledTrack />
-                  </SliderTrack>
-                  <SliderThumb />
-                </Slider>
-                <Text>{jpegQuality}%</Text>
-              </HStack>
-
-              <Divider />
-
-              <VStack w="100%" spacing={2}>
-                <Text fontWeight="bold">Output Sizes:</Text>
-                <HStack w="100%" justify="space-between">
-                  <Text>PNG:</Text>
-                  <Text>{outputSizes.png} MB</Text>
-                </HStack>
-                <HStack w="100%" justify="space-between">
-                  <Text>JPG:</Text>
-                  <Text>{outputSizes.jpg} MB</Text>
-                </HStack>
-              </VStack>
-
-              <Divider />
-
-              <VStack w="100%" spacing={3}>
-                <Text fontWeight="bold">Copy to Clipboard:</Text>
-                <HStack w="100%" spacing={4}>
-                  <Button 
-                    colorScheme="blue" 
-                    onClick={handleCopyToPNG}
-                    flex={1}
-                  >
-                    Copy as PNG
-                  </Button>
-                  <Button 
-                    colorScheme="orange" 
-                    onClick={handleCopyToJPG}
-                    flex={1}
-                  >
-                    Copy as JPG
-                  </Button>
-                </HStack>
-              </VStack>
-
-              <VStack w="100%" spacing={3}>
-                <Text fontWeight="bold">Download:</Text>
-                <HStack w="100%" spacing={4}>
-                  <Button 
-                    colorScheme="green" 
-                    onClick={handleDownloadPNG}
-                    flex={1}
-                  >
-                    Download PNG
-                  </Button>
-                  <Button 
-                    colorScheme="purple" 
-                    onClick={handleDownloadJPEG}
-                    flex={1}
-                  >
-                    Download JPEG
-                  </Button>
-                </HStack>
-              </VStack>
+              <ExportControls />
 
               <Button 
                 colorScheme="red" 

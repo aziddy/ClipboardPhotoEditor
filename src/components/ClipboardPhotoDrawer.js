@@ -15,21 +15,14 @@ import {
   Input,
   IconButton,
   Tooltip,
-  Divider,
 } from '@chakra-ui/react';
 import { useImageUpload } from '../utils/imageUpload';
-import { 
-  copyToClipboard, 
-  downloadImage, 
-  getOutputSizes 
-} from '../utils/imageExport';
+import { useImageExportControls } from '../utils/useImageExportControls';
 
 function ClipboardPhotoDrawer() {
   const [image, setImage] = useState(null);
   const [crop, setCrop] = useState();
   const [imageRef, setImageRef] = useState(null);
-  const [outputSizes, setOutputSizes] = useState({ png: '0.00', jpg: '0.00' });
-  const [jpegQuality, setJpegQuality] = useState(90);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawingColor, setDrawingColor] = useState('#FF0000');
   const [strokeSize, setStrokeSize] = useState(5);
@@ -40,6 +33,13 @@ function ClipboardPhotoDrawer() {
   const canvasRef = useRef(null);
   const contextRef = useRef(null);
   const toast = useToast();
+
+  // Use the export controls hook
+  const { updateOutputSizes, resetExportState, ExportControls } = useImageExportControls(
+    canvasRef,
+    toast,
+    'drawn'
+  );
 
   // Use the shared image upload hook
   const { fileInputRef, handlePaste, renderFileUploadUI } = useImageUpload(setImage, null, toast);
@@ -122,25 +122,7 @@ function ClipboardPhotoDrawer() {
     setCurrentHistoryIndex(newHistory.length - 1);
   }, [drawingHistory, currentHistoryIndex]);
 
-  const updateOutputSizes = useCallback(async () => {
-    if (!canvasRef.current) {
-      setOutputSizes({ png: '0.00', jpg: '0.00' });
-      return;
-    }
 
-    try {
-      const sizes = await getOutputSizes(canvasRef.current, jpegQuality / 100);
-      setOutputSizes(sizes);
-    } catch (err) {
-      setOutputSizes({ png: '0.00', jpg: '0.00' });
-      console.error('Error updating output sizes:', err);
-    }
-  }, [jpegQuality]);
-
-  // Update sizes when quality changes
-  useEffect(() => {
-    updateOutputSizes();
-  }, [jpegQuality, updateOutputSizes]);
 
   const startDrawing = useCallback((e) => {
     const canvas = canvasRef.current;
@@ -178,34 +160,14 @@ function ClipboardPhotoDrawer() {
     setImage(null);
     setCrop(undefined);
     setImageRef(null);
-    setOutputSizes({ png: '0.00', jpg: '0.00' });
+    resetExportState();
     setIsDrawing(false);
     setDrawingColor('#FF0000');
     setStrokeSize(5);
     setIsEraser(false);
     setDrawingHistory([]);
     setCurrentHistoryIndex(-1);
-  }, []);
-
-  const handleCopyToPNG = useCallback(async () => {
-    if (!canvasRef.current) return;
-    await copyToClipboard(canvasRef.current, 'image/png', 1, toast);
-  }, [toast]);
-
-  const handleCopyToJPG = useCallback(async () => {
-    if (!canvasRef.current) return;
-    await copyToClipboard(canvasRef.current, 'image/jpeg', jpegQuality / 100, toast);
-  }, [jpegQuality, toast]);
-
-  const handleDownloadPNG = useCallback(async () => {
-    if (!canvasRef.current) return;
-    await downloadImage(canvasRef.current, 'image/png', 1, 'drawn-image', toast);
-  }, [toast]);
-
-  const handleDownloadJPEG = useCallback(async () => {
-    if (!canvasRef.current) return;
-    await downloadImage(canvasRef.current, 'image/jpeg', jpegQuality / 100, 'drawn-image', toast);
-  }, [jpegQuality, toast]);
+  }, [resetExportState]);
 
   return (
     <Box p={6} maxW="800px" mx="auto" onPaste={(e) => {
@@ -290,39 +252,6 @@ function ClipboardPhotoDrawer() {
                 <Text>{strokeSize}px</Text>
               </HStack>
 
-              <HStack w="100%" justify="space-between" align="center">
-                <Text>JPEG Quality:</Text>
-                <Slider
-                  value={jpegQuality}
-                  onChange={setJpegQuality}
-                  min={10}
-                  max={100}
-                  width="200px"
-                >
-                  <SliderTrack>
-                    <SliderFilledTrack />
-                  </SliderTrack>
-                  <SliderThumb />
-                </Slider>
-                <Text>{jpegQuality}%</Text>
-              </HStack>
-
-              <Divider />
-
-              <VStack w="100%" spacing={2}>
-                <Text fontWeight="bold">Output Sizes:</Text>
-                <HStack w="100%" justify="space-between">
-                  <Text>PNG:</Text>
-                  <Text>{outputSizes.png} MB</Text>
-                </HStack>
-                <HStack w="100%" justify="space-between">
-                  <Text>JPG:</Text>
-                  <Text>{outputSizes.jpg} MB</Text>
-                </HStack>
-              </VStack>
-
-              <Divider />
-
               <HStack w="100%" spacing={4}>
                 <Button
                   colorScheme={isEraser ? 'pink' : 'blue'}
@@ -341,45 +270,7 @@ function ClipboardPhotoDrawer() {
                 </Button>
               </HStack>
 
-              <VStack w="100%" spacing={3}>
-                <Text fontWeight="bold">Copy to Clipboard:</Text>
-                <HStack w="100%" spacing={4}>
-                  <Button 
-                    colorScheme="blue" 
-                    onClick={handleCopyToPNG}
-                    flex={1}
-                  >
-                    Copy as PNG
-                  </Button>
-                  <Button 
-                    colorScheme="orange" 
-                    onClick={handleCopyToJPG}
-                    flex={1}
-                  >
-                    Copy as JPG
-                  </Button>
-                </HStack>
-              </VStack>
-
-              <VStack w="100%" spacing={3}>
-                <Text fontWeight="bold">Download:</Text>
-                <HStack w="100%" spacing={4}>
-                  <Button 
-                    colorScheme="green" 
-                    onClick={handleDownloadPNG}
-                    flex={1}
-                  >
-                    Download PNG
-                  </Button>
-                  <Button 
-                    colorScheme="purple" 
-                    onClick={handleDownloadJPEG}
-                    flex={1}
-                  >
-                    Download JPEG
-                  </Button>
-                </HStack>
-              </VStack>
+              <ExportControls />
 
               <Button 
                 colorScheme="red" 
