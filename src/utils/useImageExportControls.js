@@ -14,6 +14,20 @@ import {
 import QualitySlider from './QualitySlider';
 
 /**
+ * Format size display to show KB in brackets when under 1MB
+ * @param {string} sizeInMB - Size in MB as string
+ * @returns {string} - Formatted size string
+ */
+const formatSizeDisplay = (sizeInMB) => {
+  const size = parseFloat(sizeInMB);
+  if (size < 1 && size > 0) {
+    const sizeInKB = (size * 1024).toFixed(1);
+    return `${sizeInMB} MB (${sizeInKB} KB)`;
+  }
+  return `${sizeInMB} MB`;
+};
+
+/**
  * Custom hook that provides image export functionality and UI components
  * @param {function|object} canvasSource - Either a canvas ref or a function that returns a canvas
  * @param {function} toast - Toast notification function
@@ -108,11 +122,11 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
         <Text fontWeight="bold">Output Sizes:</Text>
         <HStack w="100%" justify="space-between">
           <Text>PNG:</Text>
-          <Text>{outputSizes.png} MB</Text>
+          <Text>{formatSizeDisplay(outputSizes.png)}</Text>
         </HStack>
         <HStack w="100%" justify="space-between">
           <Text>JPG:</Text>
-          <Text>{outputSizes.jpg} MB</Text>
+          <Text>{formatSizeDisplay(outputSizes.jpg)}</Text>
         </HStack>
       </VStack>
 
