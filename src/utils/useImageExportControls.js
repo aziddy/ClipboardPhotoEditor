@@ -133,8 +133,7 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
 
       <Divider />
 
-      <VStack w="100%" spacing={3}>
-        {/* <Text fontWeight="bold">Copy to Clipboard:</Text> */}
+      <VStack w="100%" spacing={3} align="stretch">
         <HStack w="100%" spacing={4}>
           <Button 
             colorScheme="blue" 
@@ -160,10 +159,7 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
             </Button>
           </Tooltip>
         </HStack>
-      </VStack>
 
-      <VStack w="100%" spacing={3}>
-        {/* <Text fontWeight="bold">Download:</Text> */}
         <HStack w="100%" spacing={4}>
           <Button 
             colorScheme="green" 

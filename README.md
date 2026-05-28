@@ -1,5 +1,7 @@
 # ClipboardPhotoEditor
-Paste (from your Clipboard) your Image into the Tab and then Edit (crop, resize, ....) and receive the newly edited Image in your Clipboard for use Elsewhere
+Paste or import an image, edit it in one unified canvas, and copy or download the final composition.
+
+The editor supports raster layers, drawing, erasing, cropping, resizing, layer ordering, opacity, visibility, undo, redo, clipboard export, and PNG/JPEG downloads from a single workspace.
 
 ## SSL Certificates Setup
 This project uses HTTPS locally for secure development. Follow these steps to set up SSL certificates:
@@ -45,6 +47,8 @@ Now you can host the files in any static file hosting service like Vercel, Netli
 
 ## How to use
 
-1. Paste your image into the tab
-2. Edit the image (crop, resize, etc.)
-3. Receive the newly edited image in your clipboard for use elsewhere
+1. Paste, drop, or import an image to create the document.
+2. Import more images to add them as layers.
+3. Use the toolbar for move, brush, eraser, crop, and resize tools.
+4. Use the Layers panel to select, reorder, duplicate, hide, delete, rename, or fade layers.
+5. Copy the composed image to your clipboard or download it as PNG/JPEG.
