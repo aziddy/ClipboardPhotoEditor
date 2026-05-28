@@ -64,6 +64,17 @@ const TOOLS = {
   RESIZE: 'resize',
 };
 
+const TOOL_SHORTCUTS = {
+  1: TOOLS.MOVE,
+  m: TOOLS.MOVE,
+  2: TOOLS.BRUSH,
+  b: TOOLS.BRUSH,
+  3: TOOLS.CROP,
+  c: TOOLS.CROP,
+  4: TOOLS.RESIZE,
+  r: TOOLS.RESIZE,
+};
+
 const createEmptyDocument = () => ({
   width: 0,
   height: 0,
@@ -118,7 +129,11 @@ const createLayerId = () => {
   return `layer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
-const createLayer = ({ name, width, height, draw }) => {
+const getLayerX = (layer) => layer.x ?? 0;
+
+const getLayerY = (layer) => layer.y ?? 0;
+
+const createLayer = ({ name, width, height, x = 0, y = 0, draw }) => {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
   if (draw) {
@@ -129,6 +144,8 @@ const createLayer = ({ name, width, height, draw }) => {
     id: createLayerId(),
     name,
     canvas,
+    x,
+    y,
     visible: true,
     opacity: 100,
   };
@@ -149,21 +166,18 @@ const getFittedImageRect = (image, width, height) => {
 
 const createImageLayer = (image, doc, layerNumber) => {
   const isNewDocument = !hasDocument(doc);
-  const width = isNewDocument ? image.naturalWidth : doc.width;
-  const height = isNewDocument ? image.naturalHeight : doc.height;
+  const rect = isNewDocument
+    ? { x: 0, y: 0, width: image.naturalWidth, height: image.naturalHeight }
+    : getFittedImageRect(image, doc.width, doc.height);
 
   return createLayer({
     name: isNewDocument ? 'Background' : `Image ${layerNumber}`,
-    width,
-    height,
+    width: rect.width,
+    height: rect.height,
+    x: rect.x,
+    y: rect.y,
     draw: (ctx) => {
-      if (isNewDocument) {
-        ctx.drawImage(image, 0, 0);
-        return;
-      }
-
-      const rect = getFittedImageRect(image, width, height);
-      ctx.drawImage(image, rect.x, rect.y, rect.width, rect.height);
+      ctx.drawImage(image, 0, 0, rect.width, rect.height);
     },
   });
 };
@@ -176,9 +190,9 @@ const renderLayer = (ctx, layer, transformDraft = null) => {
   ctx.globalAlpha = opacity;
 
   if (transformDraft && hasTransform(transformDraft)) {
-    drawTransformedLayer(ctx, layer.canvas, transformDraft);
+    drawTransformedLayer(ctx, layer, transformDraft);
   } else {
-    ctx.drawImage(layer.canvas, 0, 0);
+    ctx.drawImage(layer.canvas, getLayerX(layer), getLayerY(layer));
   }
 
   ctx.restore();
@@ -391,8 +405,20 @@ const hasTransform = (draft) => (
   Math.round(draft.scale) !== 100
 );
 
-const getTransformedBounds = (canvas, draft) => {
-  const bounds = getLayerBounds(canvas);
+const getLayerDocumentBounds = (layer) => {
+  const bounds = getLayerBounds(layer.canvas);
+  if (!bounds) return null;
+
+  return {
+    x: getLayerX(layer) + bounds.x,
+    y: getLayerY(layer) + bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  };
+};
+
+const getTransformedBounds = (layer, draft) => {
+  const bounds = getLayerDocumentBounds(layer);
   if (!bounds) return null;
 
   const scale = clamp(draft.scale, 10, 300) / 100;
@@ -409,15 +435,15 @@ const getTransformedBounds = (canvas, draft) => {
   };
 };
 
-const drawTransformedLayer = (ctx, canvas, draft) => {
-  const bounds = getLayerBounds(canvas);
+const drawTransformedLayer = (ctx, layer, draft) => {
+  const bounds = getLayerBounds(layer.canvas);
   if (!bounds) return;
 
-  const nextBounds = getTransformedBounds(canvas, draft);
+  const nextBounds = getTransformedBounds(layer, draft);
   if (!nextBounds) return;
 
   ctx.drawImage(
-    canvas,
+    layer.canvas,
     bounds.x,
     bounds.y,
     bounds.width,
@@ -429,20 +455,51 @@ const drawTransformedLayer = (ctx, canvas, draft) => {
   );
 };
 
-const rasterizeTransform = (canvas, draft) => {
-  const nextCanvas = createCanvas(canvas.width, canvas.height);
+const rasterizeTransform = (layer, draft) => {
+  const bounds = getLayerBounds(layer.canvas);
+  if (!bounds) {
+    return {
+      ...layer,
+      x: getLayerX(layer) + draft.dx,
+      y: getLayerY(layer) + draft.dy,
+    };
+  }
+
+  const nextBounds = getTransformedBounds(layer, draft);
+  if (!nextBounds) return layer;
+
+  const nextWidth = Math.max(1, Math.round(nextBounds.width));
+  const nextHeight = Math.max(1, Math.round(nextBounds.height));
+  const nextCanvas = createCanvas(nextWidth, nextHeight);
   const ctx = nextCanvas.getContext('2d');
-  drawTransformedLayer(ctx, canvas, draft);
-  return nextCanvas;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(
+    layer.canvas,
+    bounds.x,
+    bounds.y,
+    bounds.width,
+    bounds.height,
+    0,
+    0,
+    nextWidth,
+    nextHeight
+  );
+
+  return {
+    ...layer,
+    canvas: nextCanvas,
+    x: Math.round(nextBounds.x),
+    y: Math.round(nextBounds.y),
+  };
 };
 
-const drawLayerBounds = (ctx, canvas, draft) => {
+const drawLayerBounds = (ctx, layer, draft, doc) => {
   const bounds = hasTransform(draft)
-    ? getTransformedBounds(canvas, draft)
-    : getLayerBounds(canvas);
+    ? getTransformedBounds(layer, draft)
+    : getLayerDocumentBounds(layer);
   if (!bounds) return;
 
-  const lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 600));
+  const lineWidth = Math.max(2, Math.round(Math.min(doc.width, doc.height) / 600));
   ctx.save();
   ctx.setLineDash([lineWidth * 4, lineWidth * 3]);
   ctx.lineWidth = lineWidth;
@@ -456,21 +513,13 @@ const cropDocument = (doc, crop) => {
   const layers = doc.layers.map((layer) => {
     const canvas = createCanvas(safeCrop.width, safeCrop.height);
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(
-      layer.canvas,
-      safeCrop.x,
-      safeCrop.y,
-      safeCrop.width,
-      safeCrop.height,
-      0,
-      0,
-      safeCrop.width,
-      safeCrop.height
-    );
+    ctx.drawImage(layer.canvas, getLayerX(layer) - safeCrop.x, getLayerY(layer) - safeCrop.y);
 
     return {
       ...layer,
       canvas,
+      x: 0,
+      y: 0,
     };
   });
 
@@ -485,16 +534,23 @@ const cropDocument = (doc, crop) => {
 const resizeDocument = (doc, width, height) => {
   const nextWidth = clampDimension(width);
   const nextHeight = clampDimension(height);
+  const scaleX = nextWidth / doc.width;
+  const scaleY = nextHeight / doc.height;
 
   const layers = doc.layers.map((layer) => {
-    const canvas = createCanvas(nextWidth, nextHeight);
+    const canvas = createCanvas(
+      Math.max(1, Math.round(layer.canvas.width * scaleX)),
+      Math.max(1, Math.round(layer.canvas.height * scaleY))
+    );
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(layer.canvas, 0, 0, nextWidth, nextHeight);
+    ctx.drawImage(layer.canvas, 0, 0, canvas.width, canvas.height);
 
     return {
       ...layer,
       canvas,
+      x: Math.round(getLayerX(layer) * scaleX),
+      y: Math.round(getLayerY(layer) * scaleY),
     };
   });
 
@@ -506,6 +562,11 @@ const resizeDocument = (doc, width, height) => {
   };
 };
 
+const getLayerPoint = (layer, point) => ({
+  x: point.x - getLayerX(layer),
+  y: point.y - getLayerY(layer),
+});
+
 const updateLayer = (doc, layerId, updater) => ({
   ...doc,
   layers: doc.layers.map((layer) => (
@@ -516,14 +577,6 @@ const updateLayer = (doc, layerId, updater) => ({
 const editorReducer = (state, action) => {
   switch (action.type) {
     case 'commit': {
-      if (!hasDocument(action.doc)) {
-        return {
-          doc: createEmptyDocument(),
-          history: [],
-          historyIndex: -1,
-        };
-      }
-
       const stateDoc = cloneDocument(action.doc);
       const historyDoc = cloneDocument(action.doc);
       const baseHistory = state.history.slice(0, state.historyIndex + 1);
@@ -595,6 +648,14 @@ const loadImage = (url) => (
     image.src = url;
   })
 );
+
+const isEditableShortcutTarget = (target) => {
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+
+  const tagName = target.tagName?.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
+};
 
 const ToolButton = ({ icon: Icon, label, isActive, onClick, isDisabled = false }) => (
   <Tooltip label={label} placement="right" hasArrow>
@@ -714,6 +775,20 @@ function UnifiedPhotoEditor() {
     ExportControls,
   } = useImageExportControls(getCompositeCanvas, toast, 'edited');
 
+  const undoDocument = useCallback(() => {
+    interactionRef.current = null;
+    transformDraftRef.current = { dx: 0, dy: 0, scale: 100 };
+    setTransformDraft({ dx: 0, dy: 0, scale: 100 });
+    dispatch({ type: 'undo' });
+  }, []);
+
+  const redoDocument = useCallback(() => {
+    interactionRef.current = null;
+    transformDraftRef.current = { dx: 0, dy: 0, scale: 100 };
+    setTransformDraft({ dx: 0, dy: 0, scale: 100 });
+    dispatch({ type: 'redo' });
+  }, []);
+
   const renderDisplay = useCallback(() => {
     const canvas = displayCanvasRef.current;
     if (!canvas || !hasDocument(doc)) return;
@@ -729,7 +804,7 @@ function UnifiedPhotoEditor() {
     });
 
     if (activeTool === TOOLS.MOVE && activeLayer) {
-      drawLayerBounds(ctx, activeLayer.canvas, transformDraft);
+      drawLayerBounds(ctx, activeLayer, transformDraft, doc);
     }
 
     if (activeTool === TOOLS.CROP) {
@@ -744,6 +819,35 @@ function UnifiedPhotoEditor() {
   useEffect(() => {
     updateOutputSizes();
   }, [doc, updateOutputSizes]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (isEditableShortcutTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+
+      if (event.metaKey && key === 'z') {
+        event.preventDefault();
+
+        if (event.shiftKey) {
+          redoDocument();
+        } else {
+          undoDocument();
+        }
+        return;
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      const nextTool = TOOL_SHORTCUTS[key];
+      if (!nextTool || !hasDocument(docRef.current)) return;
+
+      event.preventDefault();
+      setActiveTool(nextTool);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [redoDocument, undoDocument]);
 
   useEffect(() => {
     if (documentWidth <= 0 || documentHeight <= 0 || documentLayerCount === 0) {
@@ -793,7 +897,7 @@ function UnifiedPhotoEditor() {
 
       commitDocument(nextDoc);
       setCrop(null);
-      setActiveTool(TOOLS.MOVE);
+      setActiveTool(TOOLS.BRUSH);
       toast({
         title: hasDocument(currentDoc) ? 'Layer added' : 'Image loaded',
         description: hasDocument(currentDoc)
@@ -927,10 +1031,8 @@ function UnifiedPhotoEditor() {
     if (!layer) return;
 
     if (currentDoc.layers.length === 1) {
-      docRef.current = createEmptyDocument();
-      dispatch({ type: 'reset' });
+      commitDocument(createEmptyDocument());
       setCrop(null);
-      resetExportState();
       return;
     }
 
@@ -942,7 +1044,7 @@ function UnifiedPhotoEditor() {
       layers,
       activeLayerId: fallbackLayer.id,
     });
-  }, [commitDocument, resetExportState]);
+  }, [commitDocument]);
 
   const moveActiveLayer = useCallback((direction) => {
     const currentDoc = docRef.current;
@@ -993,6 +1095,7 @@ function UnifiedPhotoEditor() {
     }
 
     const ctx = layer.canvas.getContext('2d');
+    const layerPoint = getLayerPoint(layer, point);
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -1000,14 +1103,15 @@ function UnifiedPhotoEditor() {
     ctx.strokeStyle = brushColor;
     ctx.globalCompositeOperation = activeTool === TOOLS.ERASER ? 'destination-out' : 'source-over';
     ctx.beginPath();
-    ctx.moveTo(point.x, point.y);
-    ctx.lineTo(point.x + 0.01, point.y + 0.01);
+    ctx.moveTo(layerPoint.x, layerPoint.y);
+    ctx.lineTo(layerPoint.x + 0.01, layerPoint.y + 0.01);
     ctx.stroke();
 
     interactionRef.current = {
       type: 'stroke',
       pointerId: event.pointerId,
       ctx,
+      layerId: layer.id,
     };
     renderDisplay();
   }, [activeTool, brushColor, brushSize, getCanvasPoint, renderDisplay, toast]);
@@ -1018,8 +1122,11 @@ function UnifiedPhotoEditor() {
 
     const point = getCanvasPoint(event);
     if (!point) return;
+    const layer = docRef.current.layers.find((candidate) => candidate.id === interaction.layerId);
+    if (!layer) return;
+    const layerPoint = getLayerPoint(layer, point);
 
-    interaction.ctx.lineTo(point.x, point.y);
+    interaction.ctx.lineTo(layerPoint.x, layerPoint.y);
     interaction.ctx.stroke();
     renderDisplay();
   }, [getCanvasPoint, renderDisplay]);
@@ -1138,8 +1245,7 @@ function UnifiedPhotoEditor() {
     if (!layer) return;
 
     const nextDoc = updateLayer(currentDoc, layer.id, (candidate) => ({
-      ...candidate,
-      canvas: rasterizeTransform(candidate.canvas, draft),
+      ...rasterizeTransform(candidate, draft),
     }));
 
     setTransformDraft({ dx: 0, dy: 0, scale: 100 });
@@ -1332,7 +1438,7 @@ function UnifiedPhotoEditor() {
               <IconButton
                 aria-label="Undo"
                 icon={<Undo2 size={18} />}
-                onClick={() => dispatch({ type: 'undo' })}
+                onClick={undoDocument}
                 isDisabled={!canUndo}
                 size="sm"
               />
@@ -1341,7 +1447,7 @@ function UnifiedPhotoEditor() {
               <IconButton
                 aria-label="Redo"
                 icon={<Redo2 size={18} />}
-                onClick={() => dispatch({ type: 'redo' })}
+                onClick={redoDocument}
                 isDisabled={!canRedo}
                 size="sm"
               />
