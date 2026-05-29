@@ -75,6 +75,16 @@ const TOOL_SHORTCUTS = {
   r: TOOLS.RESIZE,
 };
 
+const TRANSFORM_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+
+const createDefaultTransformDraft = () => ({
+  dx: 0,
+  dy: 0,
+  scaleX: 100,
+  scaleY: 100,
+  rotationDeg: 0,
+});
+
 const createEmptyDocument = () => ({
   width: 0,
   height: 0,
@@ -399,10 +409,29 @@ const getLayerBounds = (canvas) => {
   };
 };
 
+const toRadians = (degrees) => degrees * Math.PI / 180;
+
+const toDegrees = (radians) => radians * 180 / Math.PI;
+
+const normalizeRotation = (degrees) => {
+  let normalized = degrees % 360;
+  if (normalized > 180) normalized -= 360;
+  if (normalized < -180) normalized += 360;
+  return normalized;
+};
+
+const getDraftScaleX = (draft) => draft.scaleX ?? draft.scale ?? 100;
+
+const getDraftScaleY = (draft) => draft.scaleY ?? draft.scale ?? 100;
+
+const getDraftRotation = (draft) => draft.rotationDeg ?? 0;
+
 const hasTransform = (draft) => (
   Math.round(draft.dx) !== 0 ||
   Math.round(draft.dy) !== 0 ||
-  Math.round(draft.scale) !== 100
+  Math.round(getDraftScaleX(draft)) !== 100 ||
+  Math.round(getDraftScaleY(draft)) !== 100 ||
+  Math.round(getDraftRotation(draft)) !== 0
 );
 
 const getLayerDocumentBounds = (layer) => {
@@ -417,42 +446,101 @@ const getLayerDocumentBounds = (layer) => {
   };
 };
 
-const getTransformedBounds = (layer, draft) => {
+const rotateLocalPoint = (center, localPoint, rotationDeg) => {
+  const angle = toRadians(rotationDeg);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  return {
+    x: center.x + localPoint.x * cos - localPoint.y * sin,
+    y: center.y + localPoint.x * sin + localPoint.y * cos,
+  };
+};
+
+const getLocalPoint = (point, center, rotationDeg) => {
+  const angle = toRadians(rotationDeg);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+
+  return {
+    x: dx * cos + dy * sin,
+    y: -dx * sin + dy * cos,
+  };
+};
+
+const getTransformedGeometry = (layer, draft = createDefaultTransformDraft()) => {
   const bounds = getLayerDocumentBounds(layer);
   if (!bounds) return null;
 
-  const scale = clamp(draft.scale, 10, 300) / 100;
-  const nextWidth = bounds.width * scale;
-  const nextHeight = bounds.height * scale;
-  const centerX = bounds.x + bounds.width / 2 + draft.dx;
-  const centerY = bounds.y + bounds.height / 2 + draft.dy;
+  const scaleX = clamp(getDraftScaleX(draft), 1, 300) / 100;
+  const scaleY = clamp(getDraftScaleY(draft), 1, 300) / 100;
+  const width = Math.max(1, bounds.width * scaleX);
+  const height = Math.max(1, bounds.height * scaleY);
+  const center = {
+    x: bounds.x + bounds.width / 2 + draft.dx,
+    y: bounds.y + bounds.height / 2 + draft.dy,
+  };
+  const rotationDeg = getDraftRotation(draft);
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+  const corners = {
+    nw: rotateLocalPoint(center, { x: -halfWidth, y: -halfHeight }, rotationDeg),
+    ne: rotateLocalPoint(center, { x: halfWidth, y: -halfHeight }, rotationDeg),
+    se: rotateLocalPoint(center, { x: halfWidth, y: halfHeight }, rotationDeg),
+    sw: rotateLocalPoint(center, { x: -halfWidth, y: halfHeight }, rotationDeg),
+  };
+  const handles = {
+    ...corners,
+    n: rotateLocalPoint(center, { x: 0, y: -halfHeight }, rotationDeg),
+    e: rotateLocalPoint(center, { x: halfWidth, y: 0 }, rotationDeg),
+    s: rotateLocalPoint(center, { x: 0, y: halfHeight }, rotationDeg),
+    w: rotateLocalPoint(center, { x: -halfWidth, y: 0 }, rotationDeg),
+  };
 
   return {
-    x: centerX - nextWidth / 2,
-    y: centerY - nextHeight / 2,
-    width: nextWidth,
-    height: nextHeight,
+    bounds,
+    center,
+    width,
+    height,
+    rotationDeg,
+    corners,
+    handles,
+  };
+};
+
+const getBoundsFromPoints = (points) => {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+
+  return {
+    x: Math.min(...xs),
+    y: Math.min(...ys),
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys),
   };
 };
 
 const drawTransformedLayer = (ctx, layer, draft) => {
-  const bounds = getLayerBounds(layer.canvas);
-  if (!bounds) return;
+  const geometry = getTransformedGeometry(layer, draft);
+  if (!geometry) return;
 
-  const nextBounds = getTransformedBounds(layer, draft);
-  if (!nextBounds) return;
-
+  ctx.save();
+  ctx.translate(geometry.center.x, geometry.center.y);
+  ctx.rotate(toRadians(geometry.rotationDeg));
   ctx.drawImage(
     layer.canvas,
-    bounds.x,
-    bounds.y,
-    bounds.width,
-    bounds.height,
-    nextBounds.x,
-    nextBounds.y,
-    nextBounds.width,
-    nextBounds.height
+    geometry.bounds.x - getLayerX(layer),
+    geometry.bounds.y - getLayerY(layer),
+    geometry.bounds.width,
+    geometry.bounds.height,
+    -geometry.width / 2,
+    -geometry.height / 2,
+    geometry.width,
+    geometry.height
   );
+  ctx.restore();
 };
 
 const rasterizeTransform = (layer, draft) => {
@@ -465,47 +553,192 @@ const rasterizeTransform = (layer, draft) => {
     };
   }
 
-  const nextBounds = getTransformedBounds(layer, draft);
-  if (!nextBounds) return layer;
+  const geometry = getTransformedGeometry(layer, draft);
+  if (!geometry) return layer;
 
-  const nextWidth = Math.max(1, Math.round(nextBounds.width));
-  const nextHeight = Math.max(1, Math.round(nextBounds.height));
+  const transformedBounds = getBoundsFromPoints(Object.values(geometry.corners));
+  const rasterX = Math.floor(transformedBounds.x) - 1;
+  const rasterY = Math.floor(transformedBounds.y) - 1;
+  const rasterRight = Math.ceil(transformedBounds.x + transformedBounds.width) + 1;
+  const rasterBottom = Math.ceil(transformedBounds.y + transformedBounds.height) + 1;
+  const nextWidth = Math.max(1, rasterRight - rasterX);
+  const nextHeight = Math.max(1, rasterBottom - rasterY);
   const nextCanvas = createCanvas(nextWidth, nextHeight);
   const ctx = nextCanvas.getContext('2d');
   ctx.imageSmoothingQuality = 'high';
+  ctx.translate(geometry.center.x - rasterX, geometry.center.y - rasterY);
+  ctx.rotate(toRadians(geometry.rotationDeg));
   ctx.drawImage(
     layer.canvas,
     bounds.x,
     bounds.y,
     bounds.width,
     bounds.height,
-    0,
-    0,
-    nextWidth,
-    nextHeight
+    -geometry.width / 2,
+    -geometry.height / 2,
+    geometry.width,
+    geometry.height
   );
 
   return {
     ...layer,
     canvas: nextCanvas,
-    x: Math.round(nextBounds.x),
-    y: Math.round(nextBounds.y),
+    x: rasterX,
+    y: rasterY,
   };
 };
 
 const drawLayerBounds = (ctx, layer, draft, doc) => {
-  const bounds = hasTransform(draft)
-    ? getTransformedBounds(layer, draft)
-    : getLayerDocumentBounds(layer);
-  if (!bounds) return;
+  const geometry = getTransformedGeometry(layer, draft);
+  if (!geometry) return;
 
   const lineWidth = Math.max(2, Math.round(Math.min(doc.width, doc.height) / 600));
+  const handleSize = Math.max(9, Math.round(Math.min(doc.width, doc.height) / 70));
+  const { nw, ne, se, sw } = geometry.corners;
+
   ctx.save();
   ctx.setLineDash([lineWidth * 4, lineWidth * 3]);
   ctx.lineWidth = lineWidth;
   ctx.strokeStyle = '#2563eb';
-  ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  ctx.beginPath();
+  ctx.moveTo(nw.x, nw.y);
+  ctx.lineTo(ne.x, ne.y);
+  ctx.lineTo(se.x, se.y);
+  ctx.lineTo(sw.x, sw.y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#1d4ed8';
+  TRANSFORM_HANDLES.forEach((handle) => {
+    const point = geometry.handles[handle];
+    ctx.fillRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
+    ctx.strokeRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
+  });
+
   ctx.restore();
+};
+
+const getDistance = (pointA, pointB) => (
+  Math.hypot(pointA.x - pointB.x, pointA.y - pointB.y)
+);
+
+const isPointInTransformBox = (point, geometry, padding = 0) => {
+  const local = getLocalPoint(point, geometry.center, geometry.rotationDeg);
+
+  return (
+    local.x >= -geometry.width / 2 - padding &&
+    local.x <= geometry.width / 2 + padding &&
+    local.y >= -geometry.height / 2 - padding &&
+    local.y <= geometry.height / 2 + padding
+  );
+};
+
+const getTransformHit = (point, geometry, tolerance) => {
+  const handle = TRANSFORM_HANDLES.find((handleId) => (
+    getDistance(point, geometry.handles[handleId]) <= tolerance
+  ));
+
+  if (handle) {
+    return { action: 'resize', handle };
+  }
+
+  if (isPointInTransformBox(point, geometry)) {
+    return { action: 'move' };
+  }
+
+  if (isPointInTransformBox(point, geometry, tolerance * 3)) {
+    return { action: 'rotate' };
+  }
+
+  return null;
+};
+
+const getAngleFromCenter = (center, point) => (
+  toDegrees(Math.atan2(point.y - center.y, point.x - center.x))
+);
+
+const getResizeTransformDraft = (interaction, point, shiftKey) => {
+  const { baseBounds, handle, startDraft, startGeometry } = interaction;
+  const localPoint = getLocalPoint(point, startGeometry.center, startGeometry.rotationDeg);
+  const minSize = 4;
+  const moveWest = handle.includes('w');
+  const moveEast = handle.includes('e');
+  const moveNorth = handle.includes('n');
+  const moveSouth = handle.includes('s');
+  const movesHorizontally = moveWest || moveEast;
+  const movesVertically = moveNorth || moveSouth;
+
+  let left = -startGeometry.width / 2;
+  let right = startGeometry.width / 2;
+  let top = -startGeometry.height / 2;
+  let bottom = startGeometry.height / 2;
+
+  if (moveWest) left = Math.min(localPoint.x, right - minSize);
+  if (moveEast) right = Math.max(localPoint.x, left + minSize);
+  if (moveNorth) top = Math.min(localPoint.y, bottom - minSize);
+  if (moveSouth) bottom = Math.max(localPoint.y, top + minSize);
+
+  if (shiftKey) {
+    const aspectRatio = startGeometry.width / startGeometry.height || 1;
+    let width = right - left;
+    let height = bottom - top;
+
+    if (movesHorizontally && movesVertically) {
+      const widthChange = Math.abs(width / startGeometry.width - 1);
+      const heightChange = Math.abs(height / startGeometry.height - 1);
+
+      if (widthChange >= heightChange) {
+        height = Math.max(minSize, width / aspectRatio);
+        if (moveNorth) {
+          top = bottom - height;
+        } else {
+          bottom = top + height;
+        }
+      } else {
+        width = Math.max(minSize, height * aspectRatio);
+        if (moveWest) {
+          left = right - width;
+        } else {
+          right = left + width;
+        }
+      }
+    } else if (movesHorizontally) {
+      height = Math.max(minSize, width / aspectRatio);
+      top = -height / 2;
+      bottom = height / 2;
+    } else if (movesVertically) {
+      width = Math.max(minSize, height * aspectRatio);
+      left = -width / 2;
+      right = width / 2;
+    }
+  }
+
+  const width = Math.max(minSize, right - left);
+  const height = Math.max(minSize, bottom - top);
+  const localCenter = {
+    x: (left + right) / 2,
+    y: (top + bottom) / 2,
+  };
+  const nextCenter = rotateLocalPoint(
+    startGeometry.center,
+    localCenter,
+    startGeometry.rotationDeg
+  );
+  const baseCenter = {
+    x: baseBounds.x + baseBounds.width / 2,
+    y: baseBounds.y + baseBounds.height / 2,
+  };
+
+  return {
+    ...startDraft,
+    dx: nextCenter.x - baseCenter.x,
+    dy: nextCenter.y - baseCenter.y,
+    scaleX: clamp(width / baseBounds.width * 100, 1, 300),
+    scaleY: clamp(height / baseBounds.height * 100, 1, 300),
+    rotationDeg: startGeometry.rotationDeg,
+  };
 };
 
 const cropDocument = (doc, crop) => {
@@ -722,7 +955,7 @@ function UnifiedPhotoEditor() {
   const interactionRef = useRef(null);
   const docRef = useRef(createEmptyDocument());
   const cropRef = useRef(null);
-  const transformDraftRef = useRef({ dx: 0, dy: 0, scale: 100 });
+  const transformDraftRef = useRef(createDefaultTransformDraft());
 
   const [{ doc, history, historyIndex }, dispatch] = useReducer(editorReducer, {
     doc: createEmptyDocument(),
@@ -736,7 +969,7 @@ function UnifiedPhotoEditor() {
   const [crop, setCrop] = useState(null);
   const [aspectLocked, setAspectLocked] = useState(true);
   const [resizeDraft, setResizeDraft] = useState({ width: 0, height: 0, scale: 100 });
-  const [transformDraft, setTransformDraft] = useState({ dx: 0, dy: 0, scale: 100 });
+  const [transformDraft, setTransformDraft] = useState(createDefaultTransformDraft());
 
   const activeLayer = useMemo(() => getActiveLayer(doc), [doc]);
   const canUndo = historyIndex > 0;
@@ -777,15 +1010,15 @@ function UnifiedPhotoEditor() {
 
   const undoDocument = useCallback(() => {
     interactionRef.current = null;
-    transformDraftRef.current = { dx: 0, dy: 0, scale: 100 };
-    setTransformDraft({ dx: 0, dy: 0, scale: 100 });
+    transformDraftRef.current = createDefaultTransformDraft();
+    setTransformDraft(createDefaultTransformDraft());
     dispatch({ type: 'undo' });
   }, []);
 
   const redoDocument = useCallback(() => {
     interactionRef.current = null;
-    transformDraftRef.current = { dx: 0, dy: 0, scale: 100 };
-    setTransformDraft({ dx: 0, dy: 0, scale: 100 });
+    transformDraftRef.current = createDefaultTransformDraft();
+    setTransformDraft(createDefaultTransformDraft());
     dispatch({ type: 'redo' });
   }, []);
 
@@ -863,7 +1096,7 @@ function UnifiedPhotoEditor() {
   }, [documentWidth, documentHeight, documentLayerCount]);
 
   useEffect(() => {
-    setTransformDraft({ dx: 0, dy: 0, scale: 100 });
+    setTransformDraft(createDefaultTransformDraft());
   }, [doc.activeLayerId, activeTool]);
 
   useEffect(() => {
@@ -1063,7 +1296,7 @@ function UnifiedPhotoEditor() {
     });
   }, [commitDocument]);
 
-  const getCanvasPoint = useCallback((event) => {
+  const getCanvasPoint = useCallback((event, shouldClamp = true) => {
     const canvas = displayCanvasRef.current;
     const currentDoc = docRef.current;
     if (!canvas || !hasDocument(currentDoc)) return null;
@@ -1071,9 +1304,16 @@ function UnifiedPhotoEditor() {
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
 
+    const point = {
+      x: (event.clientX - rect.left) * currentDoc.width / rect.width,
+      y: (event.clientY - rect.top) * currentDoc.height / rect.height,
+    };
+
+    if (!shouldClamp) return point;
+
     return {
-      x: clamp((event.clientX - rect.left) * currentDoc.width / rect.width, 0, currentDoc.width),
-      y: clamp((event.clientY - rect.top) * currentDoc.height / rect.height, 0, currentDoc.height),
+      x: clamp(point.x, 0, currentDoc.width),
+      y: clamp(point.y, 0, currentDoc.height),
     };
   }, []);
 
@@ -1210,14 +1450,33 @@ function UnifiedPhotoEditor() {
   const startMoveInteraction = useCallback((event) => {
     const currentDoc = docRef.current;
     const layer = getActiveLayer(currentDoc);
-    const point = getCanvasPoint(event);
-    if (!layer || !point) return;
+    const point = getCanvasPoint(event, false);
+    const canvas = displayCanvasRef.current;
+    if (!layer || !point || !canvas) return;
+
+    const startDraft = transformDraftRef.current;
+    const startGeometry = getTransformedGeometry(layer, startDraft);
+    const baseBounds = getLayerDocumentBounds(layer);
+    if (!startGeometry || !baseBounds) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const tolerance = Math.max(
+      6,
+      Math.min(currentDoc.width / rect.width, currentDoc.height / rect.height) * 10
+    );
+    const hit = getTransformHit(point, startGeometry, tolerance);
+    if (!hit) return;
 
     interactionRef.current = {
       type: 'move',
+      transformMode: hit.action,
+      handle: hit.handle,
       pointerId: event.pointerId,
       startPoint: point,
-      startDraft: transformDraftRef.current,
+      startDraft,
+      startGeometry,
+      baseBounds,
+      startAngle: getAngleFromCenter(startGeometry.center, point),
     };
   }, [getCanvasPoint]);
 
@@ -1225,14 +1484,33 @@ function UnifiedPhotoEditor() {
     const interaction = interactionRef.current;
     if (!interaction || interaction.type !== 'move') return;
 
-    const point = getCanvasPoint(event);
+    const point = getCanvasPoint(event, false);
     if (!point) return;
 
-    const nextDraft = {
-      ...interaction.startDraft,
-      dx: interaction.startDraft.dx + point.x - interaction.startPoint.x,
-      dy: interaction.startDraft.dy + point.y - interaction.startPoint.y,
-    };
+    let nextDraft = interaction.startDraft;
+
+    if (interaction.transformMode === 'move') {
+      nextDraft = {
+        ...interaction.startDraft,
+        dx: interaction.startDraft.dx + point.x - interaction.startPoint.x,
+        dy: interaction.startDraft.dy + point.y - interaction.startPoint.y,
+      };
+    }
+
+    if (interaction.transformMode === 'resize') {
+      nextDraft = getResizeTransformDraft(interaction, point, event.shiftKey);
+    }
+
+    if (interaction.transformMode === 'rotate') {
+      const angle = getAngleFromCenter(interaction.startGeometry.center, point);
+      nextDraft = {
+        ...interaction.startDraft,
+        rotationDeg: normalizeRotation(
+          getDraftRotation(interaction.startDraft) + angle - interaction.startAngle
+        ),
+      };
+    }
+
     transformDraftRef.current = nextDraft;
     setTransformDraft(nextDraft);
   }, [getCanvasPoint]);
@@ -1248,8 +1526,8 @@ function UnifiedPhotoEditor() {
       ...rasterizeTransform(candidate, draft),
     }));
 
-    setTransformDraft({ dx: 0, dy: 0, scale: 100 });
-    transformDraftRef.current = { dx: 0, dy: 0, scale: 100 };
+    setTransformDraft(createDefaultTransformDraft());
+    transformDraftRef.current = createDefaultTransformDraft();
     commitDocument(nextDoc);
   }, [commitDocument]);
 
@@ -1348,7 +1626,8 @@ function UnifiedPhotoEditor() {
     docRef.current = createEmptyDocument();
     setCrop(null);
     setActiveTool(TOOLS.MOVE);
-    setTransformDraft({ dx: 0, dy: 0, scale: 100 });
+    transformDraftRef.current = createDefaultTransformDraft();
+    setTransformDraft(createDefaultTransformDraft());
     resetExportState();
   }, [resetExportState]);
 
@@ -1617,23 +1896,33 @@ function UnifiedPhotoEditor() {
               {hasDocument(doc) && activeTool === TOOLS.MOVE && (
                 <VStack align="stretch" spacing={4}>
                   <Text fontSize="sm" color="gray.600">
-                    Drag the active layer on the canvas. Use scale when you need to resize only this layer.
+                    Drag inside the box to move, drag handles to resize, and drag just outside the box to rotate.
                   </Text>
                   <Box>
                     <HStack justify="space-between" mb={2}>
-                      <Text fontSize="sm">Layer scale</Text>
-                      <Text fontSize="sm" color="gray.600">{transformDraft.scale}%</Text>
+                      <Text fontSize="sm">Uniform scale</Text>
+                      <Text fontSize="sm" color="gray.600">
+                        {Math.round((getDraftScaleX(transformDraft) + getDraftScaleY(transformDraft)) / 2)}%
+                      </Text>
                     </HStack>
                     <Slider
-                      value={transformDraft.scale}
+                      value={Math.round((getDraftScaleX(transformDraft) + getDraftScaleY(transformDraft)) / 2)}
                       min={10}
                       max={300}
-                      onChange={(scale) => setTransformDraft((current) => ({ ...current, scale }))}
+                      onChange={(scale) => setTransformDraft((current) => ({
+                        ...current,
+                        scaleX: scale,
+                        scaleY: scale,
+                      }))}
                     >
                       <SliderTrack><SliderFilledTrack /></SliderTrack>
                       <SliderThumb />
                     </Slider>
                   </Box>
+                  <HStack justify="space-between" fontSize="sm">
+                    <Text>Rotation</Text>
+                    <Text color="gray.600">{Math.round(getDraftRotation(transformDraft))} deg</Text>
+                  </HStack>
                   <HStack>
                     <Button
                       leftIcon={<Check size={16} />}
@@ -1648,7 +1937,10 @@ function UnifiedPhotoEditor() {
                     <Button
                       leftIcon={<X size={16} />}
                       size="sm"
-                      onClick={() => setTransformDraft({ dx: 0, dy: 0, scale: 100 })}
+                      onClick={() => {
+                        transformDraftRef.current = createDefaultTransformDraft();
+                        setTransformDraft(createDefaultTransformDraft());
+                      }}
                       isDisabled={!hasTransform(transformDraft)}
                       flex={1}
                     >
