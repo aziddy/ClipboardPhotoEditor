@@ -36,6 +36,7 @@ import {
   Eraser,
   Eye,
   EyeOff,
+  GripVertical,
   ImagePlus,
   Layers,
   Maximize2,
@@ -55,6 +56,7 @@ const HISTORY_LIMIT = 30;
 const MAX_DIMENSION = 12000;
 const MIN_DIMENSION = 1;
 const DEFAULT_BRUSH_COLOR = '#ff2b2b';
+const LAYER_DRAG_TYPE = 'application/x-clipboard-photo-layer';
 
 const TOOLS = {
   MOVE: 'move',
@@ -807,6 +809,30 @@ const updateLayer = (doc, layerId, updater) => ({
   )),
 });
 
+const reorderLayer = (doc, draggedLayerId, targetLayerId, placement) => {
+  if (!draggedLayerId || !targetLayerId || draggedLayerId === targetLayerId) return doc;
+
+  const draggedLayer = doc.layers.find((layer) => layer.id === draggedLayerId);
+  if (!draggedLayer) return doc;
+
+  const layersWithoutDragged = doc.layers.filter((layer) => layer.id !== draggedLayerId);
+  const targetIndex = layersWithoutDragged.findIndex((layer) => layer.id === targetLayerId);
+  if (targetIndex === -1) return doc;
+
+  const nextIndex = placement === 'before' ? targetIndex + 1 : targetIndex;
+  const layers = [...layersWithoutDragged];
+  layers.splice(nextIndex, 0, draggedLayer);
+
+  const isUnchanged = layers.every((layer, index) => layer.id === doc.layers[index]?.id);
+  if (isUnchanged) return doc;
+
+  return {
+    ...doc,
+    layers,
+    activeLayerId: draggedLayerId,
+  };
+};
+
 const editorReducer = (state, action) => {
   switch (action.type) {
     case 'commit': {
@@ -970,6 +996,8 @@ function UnifiedPhotoEditor() {
   const [aspectLocked, setAspectLocked] = useState(true);
   const [resizeDraft, setResizeDraft] = useState({ width: 0, height: 0, scale: 100 });
   const [transformDraft, setTransformDraft] = useState(createDefaultTransformDraft());
+  const [draggedLayerId, setDraggedLayerId] = useState(null);
+  const [layerDropTarget, setLayerDropTarget] = useState(null);
 
   const activeLayer = useMemo(() => getActiveLayer(doc), [doc]);
   const canUndo = historyIndex > 0;
@@ -1671,6 +1699,64 @@ function UnifiedPhotoEditor() {
     dispatch({ type: 'selectLayer', layerId });
   }, []);
 
+  const handleLayerDragStart = useCallback((event, layerId) => {
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData(LAYER_DRAG_TYPE, layerId);
+    setDraggedLayerId(layerId);
+    setLayerDropTarget(null);
+    selectLayer(layerId);
+  }, [selectLayer]);
+
+  const handleLayerDragOver = useCallback((event, targetLayerId) => {
+    if (!draggedLayerId || draggedLayerId === targetLayerId) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'move';
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const placement = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+
+    setLayerDropTarget((current) => {
+      if (current?.layerId === targetLayerId && current?.placement === placement) {
+        return current;
+      }
+
+      return {
+        layerId: targetLayerId,
+        placement,
+      };
+    });
+  }, [draggedLayerId]);
+
+  const handleLayerDrop = useCallback((event, targetLayerId) => {
+    const sourceLayerId = draggedLayerId || event.dataTransfer.getData(LAYER_DRAG_TYPE);
+    if (!sourceLayerId) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const fallbackPlacement = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+    const placement = layerDropTarget?.layerId === targetLayerId
+      ? layerDropTarget.placement
+      : fallbackPlacement;
+    const currentDoc = docRef.current;
+    const nextDoc = reorderLayer(currentDoc, sourceLayerId, targetLayerId, placement);
+
+    setDraggedLayerId(null);
+    setLayerDropTarget(null);
+
+    if (nextDoc === currentDoc) return;
+    commitDocument(nextDoc);
+  }, [commitDocument, draggedLayerId, layerDropTarget]);
+
+  const handleLayerDragEnd = useCallback(() => {
+    setDraggedLayerId(null);
+    setLayerDropTarget(null);
+  }, []);
+
   const toolCursor = useMemo(() => {
     if (activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) return 'crosshair';
     if (activeTool === TOOLS.CROP) return 'crosshair';
@@ -2078,6 +2164,11 @@ function UnifiedPhotoEditor() {
                 <VStack align="stretch" spacing={2} maxH="34vh" overflowY="auto">
                   {[...doc.layers].reverse().map((layer) => {
                     const isActive = layer.id === doc.activeLayerId;
+                    const isDragging = layer.id === draggedLayerId;
+                    const isDropBefore = layerDropTarget?.layerId === layer.id &&
+                      layerDropTarget?.placement === 'before';
+                    const isDropAfter = layerDropTarget?.layerId === layer.id &&
+                      layerDropTarget?.placement === 'after';
                     return (
                       <Box
                         key={layer.id}
@@ -2085,11 +2176,40 @@ function UnifiedPhotoEditor() {
                         borderColor={isActive ? 'blue.400' : 'gray.200'}
                         bg={isActive ? 'blue.50' : 'white'}
                         borderRadius="md"
+                        boxShadow={
+                          isDropBefore
+                            ? 'inset 0 3px 0 #3182ce'
+                            : isDropAfter
+                              ? 'inset 0 -3px 0 #3182ce'
+                              : undefined
+                        }
+                        opacity={isDragging ? 0.55 : 1}
                         p={2}
                         onClick={() => selectLayer(layer.id)}
+                        onDragOver={(event) => handleLayerDragOver(event, layer.id)}
+                        onDrop={(event) => handleLayerDrop(event, layer.id)}
                         cursor="pointer"
                       >
                         <HStack align="center" spacing={2}>
+                          <Tooltip label="Drag to reorder" hasArrow>
+                            <Box
+                              aria-label="Drag layer"
+                              color="gray.500"
+                              cursor={isDragging ? 'grabbing' : 'grab'}
+                              display="flex"
+                              alignItems="center"
+                              justifyContent="center"
+                              flexShrink={0}
+                              h="44px"
+                              w="18px"
+                              draggable
+                              onClick={(event) => event.stopPropagation()}
+                              onDragStart={(event) => handleLayerDragStart(event, layer.id)}
+                              onDragEnd={handleLayerDragEnd}
+                            >
+                              <GripVertical size={16} />
+                            </Box>
+                          </Tooltip>
                           <LayerThumbnail layer={layer} />
                           <Box flex={1} minW={0}>
                             <Input
