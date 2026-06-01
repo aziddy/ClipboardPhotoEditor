@@ -17,12 +17,14 @@ import {
   HStack,
   IconButton,
   Input,
+  Progress,
   Slider,
   SliderFilledTrack,
   SliderThumb,
   SliderTrack,
   Switch,
   Text,
+  Textarea,
   Tooltip,
   VStack,
   useToast,
@@ -39,12 +41,14 @@ import {
   EyeOff,
   GripVertical,
   ImagePlus,
+  Info,
   Layers,
   Maximize2,
   MousePointer2,
   Plus,
   Redo2,
   RotateCcw,
+  ScanText,
   SlidersHorizontal,
   Trash2,
   Undo2,
@@ -52,6 +56,7 @@ import {
   X,
 } from 'lucide-react';
 import { useImageExportControls } from '../utils/useImageExportControls';
+import { useBrowserOcr } from '../utils/useBrowserOcr';
 
 const HISTORY_LIMIT = 30;
 const MAX_DIMENSION = 12000;
@@ -1136,6 +1141,19 @@ function UnifiedPhotoEditor() {
     resetExportState,
     ExportControls,
   } = useImageExportControls(getCompositeCanvas, toast, 'edited');
+  const {
+    ocrText,
+    ocrStatus,
+    ocrStatusLabel,
+    ocrProgress,
+    ocrError,
+    ocrConfidence,
+    isOcrRunning,
+    runOcr,
+    cancelOcr,
+    clearOcr,
+    setOcrText,
+  } = useBrowserOcr();
 
   const undoDocument = useCallback(() => {
     interactionRef.current = null;
@@ -1825,6 +1843,67 @@ function UnifiedPhotoEditor() {
     commitDocument(nextDoc);
   }, [commitDocument, resizeDraft.height, resizeDraft.width]);
 
+  const handleRunOcr = useCallback(async () => {
+    const canvas = getCompositeCanvas();
+    if (!canvas) {
+      toast({
+        title: 'No image available',
+        description: 'Import an image before running OCR.',
+        status: 'info',
+        duration: 2600,
+        isClosable: true,
+      });
+      return;
+    }
+
+    try {
+      const text = await runOcr(canvas);
+      toast({
+        title: text ? 'OCR complete' : 'No text found',
+        description: text
+          ? 'Recognized text is ready to copy.'
+          : 'OCR finished, but no readable text was detected.',
+        status: text ? 'success' : 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+
+      toast({
+        title: 'OCR failed',
+        description: err?.message || 'Could not recognize text in this image.',
+        status: 'error',
+        duration: 3500,
+        isClosable: true,
+      });
+    }
+  }, [getCompositeCanvas, runOcr, toast]);
+
+  const handleCopyOcrText = useCallback(async () => {
+    const text = ocrText.trim();
+    if (!text) return;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: 'Text copied',
+        description: 'Recognized text was copied to the clipboard.',
+        status: 'success',
+        duration: 2600,
+        isClosable: true,
+      });
+    } catch (err) {
+      toast({
+        title: 'Copy failed',
+        description: 'Could not copy text to the clipboard.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    }
+  }, [ocrText, toast]);
+
   const resetEditor = useCallback(() => {
     dispatch({ type: 'reset' });
     docRef.current = createEmptyDocument();
@@ -1833,7 +1912,8 @@ function UnifiedPhotoEditor() {
     setActiveTool(TOOLS.MOVE);
     resetTransformDraft();
     resetExportState();
-  }, [resetExportState, resetTransformDraft, updateSelectedLayerIds]);
+    clearOcr();
+  }, [clearOcr, resetExportState, resetTransformDraft, updateSelectedLayerIds]);
 
   const updateResizeWidth = useCallback((value) => {
     const width = clampDimension(value);
@@ -1978,6 +2058,7 @@ function UnifiedPhotoEditor() {
   }, [activeTool]);
 
   const activeLayerIndex = doc.layers.findIndex((layer) => layer.id === doc.activeLayerId);
+  const hasOcrText = ocrText.trim().length > 0;
 
   return (
     <Box
@@ -2481,6 +2562,114 @@ function UnifiedPhotoEditor() {
                       </Box>
                     );
                   })}
+                </VStack>
+              )}
+            </Box>
+
+            <Box bg="white" border="1px solid" borderColor="gray.200" borderRadius="md" p={4}>
+              <HStack mb={3}>
+                <ScanText size={18} />
+                <Text fontWeight="bold">OCR</Text>
+                <Flex flex="1" />
+                <Badge colorScheme="gray">English</Badge>
+              </HStack>
+
+              <HStack
+                align="flex-start"
+                spacing={2}
+                bg="blue.50"
+                border="1px solid"
+                borderColor="blue.100"
+                borderRadius="md"
+                color="blue.900"
+                p={3}
+                mb={3}
+              >
+                <Box flexShrink={0} pt="2px">
+                  <Info size={15} />
+                </Box>
+                <Text fontSize="sm">
+                  OCR runs locally in your browser against the current canvas. The image is not uploaded; only the OCR engine and English language data may download and cache in your browser.
+                </Text>
+              </HStack>
+
+              {!hasDocument(doc) ? (
+                <Text color="gray.600" fontSize="sm">
+                  Import an image to enable OCR.
+                </Text>
+              ) : (
+                <VStack align="stretch" spacing={3}>
+                  <HStack>
+                    <Button
+                      leftIcon={<ScanText size={16} />}
+                      colorScheme="blue"
+                      size="sm"
+                      onClick={handleRunOcr}
+                      isLoading={isOcrRunning}
+                      loadingText="Reading"
+                      isDisabled={isOcrRunning}
+                      flex={1}
+                    >
+                      Run OCR
+                    </Button>
+                    <Button
+                      leftIcon={isOcrRunning ? <X size={16} /> : <Trash2 size={16} />}
+                      size="sm"
+                      onClick={isOcrRunning ? cancelOcr : clearOcr}
+                      isDisabled={!isOcrRunning && !hasOcrText && !ocrError}
+                      variant="outline"
+                    >
+                      {isOcrRunning ? 'Cancel' : 'Clear'}
+                    </Button>
+                  </HStack>
+
+                  {(isOcrRunning || ocrStatus === 'succeeded' || ocrStatus === 'canceled') && (
+                    <Box>
+                      <HStack justify="space-between" mb={1}>
+                        <Text fontSize="sm" color="gray.600">
+                          {ocrStatusLabel || 'Ready'}
+                        </Text>
+                        {isOcrRunning && (
+                          <Text fontSize="sm" color="gray.600">
+                            {ocrProgress}%
+                          </Text>
+                        )}
+                        {!isOcrRunning && ocrConfidence !== null && (
+                          <Text fontSize="sm" color="gray.600">
+                            {ocrConfidence}% confidence
+                          </Text>
+                        )}
+                      </HStack>
+                      {isOcrRunning && (
+                        <Progress value={ocrProgress} size="sm" borderRadius="full" />
+                      )}
+                    </Box>
+                  )}
+
+                  {ocrError && (
+                    <Text color="red.600" fontSize="sm">
+                      {ocrError}
+                    </Text>
+                  )}
+
+                  <Textarea
+                    value={ocrText}
+                    onChange={(event) => setOcrText(event.target.value)}
+                    placeholder="Recognized text"
+                    minH="132px"
+                    resize="vertical"
+                    fontFamily="mono"
+                    fontSize="sm"
+                  />
+
+                  <Button
+                    leftIcon={<Copy size={16} />}
+                    size="sm"
+                    onClick={handleCopyOcrText}
+                    isDisabled={!hasOcrText}
+                  >
+                    Copy Text
+                  </Button>
                 </VStack>
               )}
             </Box>
