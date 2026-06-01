@@ -10,6 +10,7 @@ import {
   Badge,
   Box,
   Button,
+  Checkbox,
   Divider,
   Flex,
   Grid,
@@ -214,7 +215,10 @@ const renderDocument = (ctx, doc, options = {}) => {
   ctx.clearRect(0, 0, doc.width, doc.height);
 
   doc.layers.forEach((layer) => {
-    const transformDraft = layer.id === options.transformLayerId
+    const shouldTransform = options.transformLayerIds
+      ? options.transformLayerIds.has(layer.id)
+      : layer.id === options.transformLayerId;
+    const transformDraft = shouldTransform
       ? options.transformDraft
       : null;
     renderLayer(ctx, layer, transformDraft);
@@ -448,6 +452,29 @@ const getLayerDocumentBounds = (layer) => {
   };
 };
 
+const getLayerGroupBounds = (layers) => {
+  const bounds = layers.map(getLayerDocumentBounds).filter(Boolean);
+  if (bounds.length === 0) return null;
+
+  const left = Math.min(...bounds.map((rect) => rect.x));
+  const top = Math.min(...bounds.map((rect) => rect.y));
+  const right = Math.max(...bounds.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...bounds.map((rect) => rect.y + rect.height));
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+};
+
+const getTranslationDraft = (draft) => ({
+  ...createDefaultTransformDraft(),
+  dx: draft?.dx ?? 0,
+  dy: draft?.dy ?? 0,
+});
+
 const rotateLocalPoint = (center, localPoint, rotationDeg) => {
   const angle = toRadians(rotationDeg);
   const cos = Math.cos(angle);
@@ -622,8 +649,31 @@ const drawLayerBounds = (ctx, layer, draft, doc) => {
   ctx.restore();
 };
 
+const drawLayerGroupBounds = (ctx, layers, draft, doc) => {
+  const bounds = getLayerGroupBounds(layers);
+  if (!bounds) return;
+
+  const lineWidth = Math.max(2, Math.round(Math.min(doc.width, doc.height) / 600));
+  const dx = draft?.dx ?? 0;
+  const dy = draft?.dy ?? 0;
+
+  ctx.save();
+  ctx.setLineDash([lineWidth * 4, lineWidth * 3]);
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = '#2563eb';
+  ctx.strokeRect(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height);
+  ctx.restore();
+};
+
 const getDistance = (pointA, pointB) => (
   Math.hypot(pointA.x - pointB.x, pointA.y - pointB.y)
+);
+
+const isPointInRect = (point, rect, padding = 0) => (
+  point.x >= rect.x - padding &&
+  point.x <= rect.x + rect.width + padding &&
+  point.y >= rect.y - padding &&
+  point.y <= rect.y + rect.height + padding
 );
 
 const isPointInTransformBox = (point, geometry, padding = 0) => {
@@ -809,6 +859,14 @@ const updateLayer = (doc, layerId, updater) => ({
   )),
 });
 
+const getUniqueLayerIds = (layerIds) => (
+  Array.from(new Set(layerIds.filter(Boolean)))
+);
+
+const areLayerIdListsEqual = (first, second) => (
+  first.length === second.length && first.every((layerId, index) => layerId === second[index])
+);
+
 const reorderLayer = (doc, draggedLayerId, targetLayerId, placement) => {
   if (!draggedLayerId || !targetLayerId || draggedLayerId === targetLayerId) return doc;
 
@@ -982,6 +1040,7 @@ function UnifiedPhotoEditor() {
   const docRef = useRef(createEmptyDocument());
   const cropRef = useRef(null);
   const transformDraftRef = useRef(createDefaultTransformDraft());
+  const selectedLayerIdsRef = useRef([]);
 
   const [{ doc, history, historyIndex }, dispatch] = useReducer(editorReducer, {
     doc: createEmptyDocument(),
@@ -998,8 +1057,14 @@ function UnifiedPhotoEditor() {
   const [transformDraft, setTransformDraft] = useState(createDefaultTransformDraft());
   const [draggedLayerId, setDraggedLayerId] = useState(null);
   const [layerDropTarget, setLayerDropTarget] = useState(null);
+  const [selectedLayerIds, setSelectedLayerIds] = useState([]);
 
   const activeLayer = useMemo(() => getActiveLayer(doc), [doc]);
+  const selectedLayerIdSet = useMemo(() => new Set(selectedLayerIds), [selectedLayerIds]);
+  const selectedMoveLayers = useMemo(() => (
+    doc.layers.filter((layer) => selectedLayerIdSet.has(layer.id))
+  ), [doc.layers, selectedLayerIdSet]);
+  const hasMultiLayerSelection = selectedMoveLayers.length > 1;
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex >= 0 && historyIndex < history.length - 1;
   const documentWidth = doc.width;
@@ -1018,6 +1083,30 @@ function UnifiedPhotoEditor() {
     transformDraftRef.current = transformDraft;
   }, [transformDraft]);
 
+  useEffect(() => {
+    selectedLayerIdsRef.current = selectedLayerIds;
+  }, [selectedLayerIds]);
+
+  useEffect(() => {
+    const layerIds = new Set(doc.layers.map((layer) => layer.id));
+    let nextSelectedLayerIds = selectedLayerIdsRef.current.filter((layerId) => (
+      layerIds.has(layerId)
+    ));
+
+    if (doc.activeLayerId && !nextSelectedLayerIds.includes(doc.activeLayerId)) {
+      nextSelectedLayerIds = [doc.activeLayerId];
+    }
+
+    if (!hasDocument(doc)) {
+      nextSelectedLayerIds = [];
+    }
+
+    if (areLayerIdListsEqual(nextSelectedLayerIds, selectedLayerIdsRef.current)) return;
+
+    selectedLayerIdsRef.current = nextSelectedLayerIds;
+    setSelectedLayerIds(nextSelectedLayerIds);
+  }, [doc]);
+
   const commitDocument = useCallback((nextDoc) => {
     docRef.current = nextDoc;
     dispatch({ type: 'commit', doc: nextDoc });
@@ -1026,6 +1115,18 @@ function UnifiedPhotoEditor() {
   const setDocumentTransient = useCallback((nextDoc) => {
     docRef.current = nextDoc;
     dispatch({ type: 'setDoc', doc: nextDoc });
+  }, []);
+
+  const updateSelectedLayerIds = useCallback((layerIds) => {
+    const nextLayerIds = getUniqueLayerIds(layerIds);
+    selectedLayerIdsRef.current = nextLayerIds;
+    setSelectedLayerIds(nextLayerIds);
+  }, []);
+
+  const resetTransformDraft = useCallback(() => {
+    const nextDraft = createDefaultTransformDraft();
+    transformDraftRef.current = nextDraft;
+    setTransformDraft(nextDraft);
   }, []);
 
   const getCompositeCanvas = useCallback(() => makeCompositeCanvas(doc), [doc]);
@@ -1038,17 +1139,15 @@ function UnifiedPhotoEditor() {
 
   const undoDocument = useCallback(() => {
     interactionRef.current = null;
-    transformDraftRef.current = createDefaultTransformDraft();
-    setTransformDraft(createDefaultTransformDraft());
+    resetTransformDraft();
     dispatch({ type: 'undo' });
-  }, []);
+  }, [resetTransformDraft]);
 
   const redoDocument = useCallback(() => {
     interactionRef.current = null;
-    transformDraftRef.current = createDefaultTransformDraft();
-    setTransformDraft(createDefaultTransformDraft());
+    resetTransformDraft();
     dispatch({ type: 'redo' });
-  }, []);
+  }, [resetTransformDraft]);
 
   const renderDisplay = useCallback(() => {
     const canvas = displayCanvasRef.current;
@@ -1058,20 +1157,30 @@ function UnifiedPhotoEditor() {
     if (canvas.height !== doc.height) canvas.height = doc.height;
 
     const ctx = canvas.getContext('2d');
-    const transformLayerId = activeTool === TOOLS.MOVE ? doc.activeLayerId : null;
+    const isGroupMove = activeTool === TOOLS.MOVE && hasMultiLayerSelection;
+    const transformDraftForRender = isGroupMove
+      ? getTranslationDraft(transformDraft)
+      : transformDraft;
+    const transformLayerId = activeTool === TOOLS.MOVE && !isGroupMove ? doc.activeLayerId : null;
+    const transformLayerIds = isGroupMove
+      ? new Set(selectedMoveLayers.map((layer) => layer.id))
+      : null;
     renderDocument(ctx, doc, {
       transformLayerId,
-      transformDraft,
+      transformLayerIds,
+      transformDraft: transformDraftForRender,
     });
 
-    if (activeTool === TOOLS.MOVE && activeLayer) {
-      drawLayerBounds(ctx, activeLayer, transformDraft, doc);
+    if (isGroupMove) {
+      drawLayerGroupBounds(ctx, selectedMoveLayers, transformDraftForRender, doc);
+    } else if (activeTool === TOOLS.MOVE && activeLayer) {
+      drawLayerBounds(ctx, activeLayer, transformDraftForRender, doc);
     }
 
     if (activeTool === TOOLS.CROP) {
       drawCropOverlay(ctx, doc, crop);
     }
-  }, [activeLayer, activeTool, crop, doc, transformDraft]);
+  }, [activeLayer, activeTool, crop, doc, hasMultiLayerSelection, selectedMoveLayers, transformDraft]);
 
   useEffect(() => {
     renderDisplay();
@@ -1124,8 +1233,8 @@ function UnifiedPhotoEditor() {
   }, [documentWidth, documentHeight, documentLayerCount]);
 
   useEffect(() => {
-    setTransformDraft(createDefaultTransformDraft());
-  }, [doc.activeLayerId, activeTool]);
+    resetTransformDraft();
+  }, [activeTool, doc.activeLayerId, resetTransformDraft, selectedLayerIds]);
 
   useEffect(() => {
     if (activeTool !== TOOLS.CROP || !hasDocument(doc)) return;
@@ -1157,6 +1266,7 @@ function UnifiedPhotoEditor() {
           };
 
       commitDocument(nextDoc);
+      updateSelectedLayerIds([layer.id]);
       setCrop(null);
       setActiveTool(TOOLS.BRUSH);
       toast({
@@ -1181,7 +1291,7 @@ function UnifiedPhotoEditor() {
         URL.revokeObjectURL(url);
       }
     }
-  }, [commitDocument, toast]);
+  }, [commitDocument, toast, updateSelectedLayerIds]);
 
   const handleFiles = useCallback((files) => {
     const file = Array.from(files || []).find((candidate) => candidate.type.startsWith('image/'));
@@ -1264,7 +1374,8 @@ function UnifiedPhotoEditor() {
       layers: [...currentDoc.layers, layer],
       activeLayerId: layer.id,
     });
-  }, [commitDocument, toast]);
+    updateSelectedLayerIds([layer.id]);
+  }, [commitDocument, toast, updateSelectedLayerIds]);
 
   const duplicateActiveLayer = useCallback(() => {
     const currentDoc = docRef.current;
@@ -1284,7 +1395,8 @@ function UnifiedPhotoEditor() {
       layers,
       activeLayerId: duplicate.id,
     });
-  }, [commitDocument]);
+    updateSelectedLayerIds([duplicate.id]);
+  }, [commitDocument, updateSelectedLayerIds]);
 
   const deleteActiveLayer = useCallback(() => {
     const currentDoc = docRef.current;
@@ -1293,6 +1405,7 @@ function UnifiedPhotoEditor() {
 
     if (currentDoc.layers.length === 1) {
       commitDocument(createEmptyDocument());
+      updateSelectedLayerIds([]);
       setCrop(null);
       return;
     }
@@ -1305,7 +1418,8 @@ function UnifiedPhotoEditor() {
       layers,
       activeLayerId: fallbackLayer.id,
     });
-  }, [commitDocument]);
+    updateSelectedLayerIds([fallbackLayer.id]);
+  }, [commitDocument, updateSelectedLayerIds]);
 
   const moveActiveLayer = useCallback((direction) => {
     const currentDoc = docRef.current;
@@ -1477,21 +1591,52 @@ function UnifiedPhotoEditor() {
 
   const startMoveInteraction = useCallback((event) => {
     const currentDoc = docRef.current;
-    const layer = getActiveLayer(currentDoc);
     const point = getCanvasPoint(event, false);
     const canvas = displayCanvasRef.current;
-    if (!layer || !point || !canvas) return;
+    if (!point || !canvas) return;
 
     const startDraft = transformDraftRef.current;
-    const startGeometry = getTransformedGeometry(layer, startDraft);
-    const baseBounds = getLayerDocumentBounds(layer);
-    if (!startGeometry || !baseBounds) return;
-
     const rect = canvas.getBoundingClientRect();
     const tolerance = Math.max(
       6,
       Math.min(currentDoc.width / rect.width, currentDoc.height / rect.height) * 10
     );
+    const selectedLayerIdSetForMove = new Set(selectedLayerIdsRef.current);
+    const selectedLayersForMove = currentDoc.layers.filter((candidate) => (
+      selectedLayerIdSetForMove.has(candidate.id)
+    ));
+
+    if (selectedLayersForMove.length > 1) {
+      const groupBounds = getLayerGroupBounds(selectedLayersForMove);
+      if (!groupBounds) return;
+
+      const translationDraft = getTranslationDraft(startDraft);
+      const translatedGroupBounds = {
+        ...groupBounds,
+        x: groupBounds.x + translationDraft.dx,
+        y: groupBounds.y + translationDraft.dy,
+      };
+
+      if (!isPointInRect(point, translatedGroupBounds, tolerance)) return;
+
+      interactionRef.current = {
+        type: 'move',
+        transformMode: 'groupMove',
+        selectedLayerIds: selectedLayersForMove.map((candidate) => candidate.id),
+        pointerId: event.pointerId,
+        startPoint: point,
+        startDraft: translationDraft,
+      };
+      return;
+    }
+
+    const layer = getActiveLayer(currentDoc);
+    if (!layer) return;
+
+    const startGeometry = getTransformedGeometry(layer, startDraft);
+    const baseBounds = getLayerDocumentBounds(layer);
+    if (!startGeometry || !baseBounds) return;
+
     const hit = getTransformHit(point, startGeometry, tolerance);
     if (!hit) return;
 
@@ -1517,7 +1662,7 @@ function UnifiedPhotoEditor() {
 
     let nextDraft = interaction.startDraft;
 
-    if (interaction.transformMode === 'move') {
+    if (interaction.transformMode === 'move' || interaction.transformMode === 'groupMove') {
       nextDraft = {
         ...interaction.startDraft,
         dx: interaction.startDraft.dx + point.x - interaction.startPoint.x,
@@ -1544,9 +1689,41 @@ function UnifiedPhotoEditor() {
   }, [getCanvasPoint]);
 
   const applyActiveTransform = useCallback((draft = transformDraftRef.current) => {
+    const currentDoc = docRef.current;
+    const selectedLayerIdSetForMove = new Set(selectedLayerIdsRef.current);
+    const selectedLayersForMove = currentDoc.layers.filter((candidate) => (
+      selectedLayerIdSetForMove.has(candidate.id)
+    ));
+
+    if (selectedLayersForMove.length > 1) {
+      const dx = Math.round(draft.dx ?? 0);
+      const dy = Math.round(draft.dy ?? 0);
+
+      if (dx === 0 && dy === 0) {
+        resetTransformDraft();
+        return;
+      }
+
+      const nextDoc = {
+        ...currentDoc,
+        layers: currentDoc.layers.map((candidate) => (
+          selectedLayerIdSetForMove.has(candidate.id)
+            ? {
+                ...candidate,
+                x: getLayerX(candidate) + dx,
+                y: getLayerY(candidate) + dy,
+              }
+            : candidate
+        )),
+      };
+
+      resetTransformDraft();
+      commitDocument(nextDoc);
+      return;
+    }
+
     if (!hasTransform(draft)) return;
 
-    const currentDoc = docRef.current;
     const layer = getActiveLayer(currentDoc);
     if (!layer) return;
 
@@ -1554,10 +1731,9 @@ function UnifiedPhotoEditor() {
       ...rasterizeTransform(candidate, draft),
     }));
 
-    setTransformDraft(createDefaultTransformDraft());
-    transformDraftRef.current = createDefaultTransformDraft();
+    resetTransformDraft();
     commitDocument(nextDoc);
-  }, [commitDocument]);
+  }, [commitDocument, resetTransformDraft]);
 
   const finishMoveInteraction = useCallback(() => {
     if (interactionRef.current?.type !== 'move') return;
@@ -1652,12 +1828,12 @@ function UnifiedPhotoEditor() {
   const resetEditor = useCallback(() => {
     dispatch({ type: 'reset' });
     docRef.current = createEmptyDocument();
+    updateSelectedLayerIds([]);
     setCrop(null);
     setActiveTool(TOOLS.MOVE);
-    transformDraftRef.current = createDefaultTransformDraft();
-    setTransformDraft(createDefaultTransformDraft());
+    resetTransformDraft();
     resetExportState();
-  }, [resetExportState]);
+  }, [resetExportState, resetTransformDraft, updateSelectedLayerIds]);
 
   const updateResizeWidth = useCallback((value) => {
     const width = clampDimension(value);
@@ -1695,9 +1871,44 @@ function UnifiedPhotoEditor() {
     });
   }, []);
 
-  const selectLayer = useCallback((layerId) => {
+  const selectLayer = useCallback((layerId, options = {}) => {
+    const { replaceSelection = true } = options;
     dispatch({ type: 'selectLayer', layerId });
-  }, []);
+    if (replaceSelection) {
+      updateSelectedLayerIds([layerId]);
+    }
+  }, [updateSelectedLayerIds]);
+
+  const toggleLayerSelection = useCallback((layerId, isSelected) => {
+    const currentLayerIds = selectedLayerIdsRef.current;
+    let nextLayerIds = isSelected
+      ? getUniqueLayerIds([...currentLayerIds, layerId])
+      : currentLayerIds.filter((candidateId) => candidateId !== layerId);
+
+    if (nextLayerIds.length === 0) {
+      nextLayerIds = [layerId];
+    }
+
+    updateSelectedLayerIds(nextLayerIds);
+
+    if (isSelected) {
+      dispatch({ type: 'selectLayer', layerId });
+      return;
+    }
+
+    if (docRef.current.activeLayerId === layerId) {
+      dispatch({ type: 'selectLayer', layerId: nextLayerIds[0] });
+    }
+  }, [updateSelectedLayerIds]);
+
+  const handleLayerRowClick = useCallback((event, layerId) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey) {
+      toggleLayerSelection(layerId, !selectedLayerIdsRef.current.includes(layerId));
+      return;
+    }
+
+    selectLayer(layerId);
+  }, [selectLayer, toggleLayerSelection]);
 
   const handleLayerDragStart = useCallback((event, layerId) => {
     event.stopPropagation();
@@ -1705,7 +1916,9 @@ function UnifiedPhotoEditor() {
     event.dataTransfer.setData(LAYER_DRAG_TYPE, layerId);
     setDraggedLayerId(layerId);
     setLayerDropTarget(null);
-    selectLayer(layerId);
+    selectLayer(layerId, {
+      replaceSelection: !selectedLayerIdsRef.current.includes(layerId),
+    });
   }, [selectLayer]);
 
   const handleLayerDragOver = useCallback((event, targetLayerId) => {
@@ -1981,58 +2194,63 @@ function UnifiedPhotoEditor() {
 
               {hasDocument(doc) && activeTool === TOOLS.MOVE && (
                 <VStack align="stretch" spacing={4}>
-                  <Text fontSize="sm" color="gray.600">
-                    Drag inside the box to move, drag handles to resize, and drag just outside the box to rotate.
-                  </Text>
-                  <Box>
-                    <HStack justify="space-between" mb={2}>
-                      <Text fontSize="sm">Uniform scale</Text>
+                  {hasMultiLayerSelection ? (
+                    <Text fontSize="sm" color="gray.600">
+                      {selectedMoveLayers.length} layers selected. Drag inside the group box to move them together.
+                    </Text>
+                  ) : (
+                    <>
                       <Text fontSize="sm" color="gray.600">
-                        {Math.round((getDraftScaleX(transformDraft) + getDraftScaleY(transformDraft)) / 2)}%
+                        Drag inside the box to move, drag handles to resize, and drag just outside the box to rotate.
                       </Text>
-                    </HStack>
-                    <Slider
-                      value={Math.round((getDraftScaleX(transformDraft) + getDraftScaleY(transformDraft)) / 2)}
-                      min={10}
-                      max={300}
-                      onChange={(scale) => setTransformDraft((current) => ({
-                        ...current,
-                        scaleX: scale,
-                        scaleY: scale,
-                      }))}
-                    >
-                      <SliderTrack><SliderFilledTrack /></SliderTrack>
-                      <SliderThumb />
-                    </Slider>
-                  </Box>
-                  <HStack justify="space-between" fontSize="sm">
-                    <Text>Rotation</Text>
-                    <Text color="gray.600">{Math.round(getDraftRotation(transformDraft))} deg</Text>
-                  </HStack>
-                  <HStack>
-                    <Button
-                      leftIcon={<Check size={16} />}
-                      colorScheme="blue"
-                      size="sm"
-                      onClick={() => applyActiveTransform(transformDraft)}
-                      isDisabled={!hasTransform(transformDraft)}
-                      flex={1}
-                    >
-                      Apply
-                    </Button>
-                    <Button
-                      leftIcon={<X size={16} />}
-                      size="sm"
-                      onClick={() => {
-                        transformDraftRef.current = createDefaultTransformDraft();
-                        setTransformDraft(createDefaultTransformDraft());
-                      }}
-                      isDisabled={!hasTransform(transformDraft)}
-                      flex={1}
-                    >
-                      Reset
-                    </Button>
-                  </HStack>
+                      <Box>
+                        <HStack justify="space-between" mb={2}>
+                          <Text fontSize="sm">Uniform scale</Text>
+                          <Text fontSize="sm" color="gray.600">
+                            {Math.round((getDraftScaleX(transformDraft) + getDraftScaleY(transformDraft)) / 2)}%
+                          </Text>
+                        </HStack>
+                        <Slider
+                          value={Math.round((getDraftScaleX(transformDraft) + getDraftScaleY(transformDraft)) / 2)}
+                          min={10}
+                          max={300}
+                          onChange={(scale) => setTransformDraft((current) => ({
+                            ...current,
+                            scaleX: scale,
+                            scaleY: scale,
+                          }))}
+                        >
+                          <SliderTrack><SliderFilledTrack /></SliderTrack>
+                          <SliderThumb />
+                        </Slider>
+                      </Box>
+                      <HStack justify="space-between" fontSize="sm">
+                        <Text>Rotation</Text>
+                        <Text color="gray.600">{Math.round(getDraftRotation(transformDraft))} deg</Text>
+                      </HStack>
+                      <HStack>
+                        <Button
+                          leftIcon={<Check size={16} />}
+                          colorScheme="blue"
+                          size="sm"
+                          onClick={() => applyActiveTransform(transformDraft)}
+                          isDisabled={!hasTransform(transformDraft)}
+                          flex={1}
+                        >
+                          Apply
+                        </Button>
+                        <Button
+                          leftIcon={<X size={16} />}
+                          size="sm"
+                          onClick={resetTransformDraft}
+                          isDisabled={!hasTransform(transformDraft)}
+                          flex={1}
+                        >
+                          Reset
+                        </Button>
+                      </HStack>
+                    </>
+                  )}
                 </VStack>
               )}
 
@@ -2164,6 +2382,7 @@ function UnifiedPhotoEditor() {
                 <VStack align="stretch" spacing={2} maxH="34vh" overflowY="auto">
                   {[...doc.layers].reverse().map((layer) => {
                     const isActive = layer.id === doc.activeLayerId;
+                    const isSelectedForMove = selectedLayerIdSet.has(layer.id);
                     const isDragging = layer.id === draggedLayerId;
                     const isDropBefore = layerDropTarget?.layerId === layer.id &&
                       layerDropTarget?.placement === 'before';
@@ -2173,8 +2392,8 @@ function UnifiedPhotoEditor() {
                       <Box
                         key={layer.id}
                         border="1px solid"
-                        borderColor={isActive ? 'blue.400' : 'gray.200'}
-                        bg={isActive ? 'blue.50' : 'white'}
+                        borderColor={isActive ? 'blue.400' : isSelectedForMove ? 'cyan.300' : 'gray.200'}
+                        bg={isActive ? 'blue.50' : isSelectedForMove ? 'cyan.50' : 'white'}
                         borderRadius="md"
                         boxShadow={
                           isDropBefore
@@ -2185,12 +2404,19 @@ function UnifiedPhotoEditor() {
                         }
                         opacity={isDragging ? 0.55 : 1}
                         p={2}
-                        onClick={() => selectLayer(layer.id)}
+                        onClick={(event) => handleLayerRowClick(event, layer.id)}
                         onDragOver={(event) => handleLayerDragOver(event, layer.id)}
                         onDrop={(event) => handleLayerDrop(event, layer.id)}
                         cursor="pointer"
                       >
                         <HStack align="center" spacing={2}>
+                          <Checkbox
+                            aria-label={`Select ${layer.name} for move`}
+                            isChecked={isSelectedForMove}
+                            size="sm"
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={(event) => toggleLayerSelection(layer.id, event.target.checked)}
+                          />
                           <Tooltip label="Drag to reorder" hasArrow>
                             <Box
                               aria-label="Drag layer"
