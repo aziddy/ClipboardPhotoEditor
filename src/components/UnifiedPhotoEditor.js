@@ -40,6 +40,7 @@ import {
   Eye,
   EyeOff,
   GripVertical,
+  Hand,
   ImagePlus,
   Info,
   Layers,
@@ -54,6 +55,8 @@ import {
   Undo2,
   Upload,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { useImageExportControls } from '../utils/useImageExportControls';
 import { useBrowserOcr } from '../utils/useBrowserOcr';
@@ -63,6 +66,10 @@ const MAX_DIMENSION = 12000;
 const MIN_DIMENSION = 1;
 const DEFAULT_BRUSH_COLOR = '#ff2b2b';
 const LAYER_DRAG_TYPE = 'application/x-clipboard-photo-layer';
+const VIEW_ZOOM_MIN = 25;
+const VIEW_ZOOM_MAX = 400;
+const VIEW_ZOOM_STEP = 25;
+const VIEW_ZOOM_DEFAULT = 100;
 
 const TOOLS = {
   MOVE: 'move',
@@ -70,6 +77,7 @@ const TOOLS = {
   ERASER: 'eraser',
   CROP: 'crop',
   RESIZE: 'resize',
+  PAN: 'pan',
 };
 
 const TOOL_SHORTCUTS = {
@@ -81,6 +89,8 @@ const TOOL_SHORTCUTS = {
   c: TOOLS.CROP,
   4: TOOLS.RESIZE,
   r: TOOLS.RESIZE,
+  5: TOOLS.PAN,
+  h: TOOLS.PAN,
 };
 
 const TRANSFORM_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -107,6 +117,12 @@ const clampDimension = (value) => {
   if (!Number.isFinite(number)) return MIN_DIMENSION;
   return clamp(number, MIN_DIMENSION, MAX_DIMENSION);
 };
+
+const createDefaultViewOffset = () => ({ x: 0, y: 0 });
+
+const areViewOffsetsEqual = (first, second) => (
+  first.x === second.x && first.y === second.y
+);
 
 const createCanvas = (width, height) => {
   const canvas = document.createElement('canvas');
@@ -1075,12 +1091,16 @@ const LayerThumbnail = ({ layer }) => {
 function UnifiedPhotoEditor() {
   const toast = useToast();
   const fileInputRef = useRef(null);
+  const viewportRef = useRef(null);
   const displayCanvasRef = useRef(null);
   const interactionRef = useRef(null);
   const docRef = useRef(createEmptyDocument());
   const cropRef = useRef(null);
   const transformDraftRef = useRef(createDefaultTransformDraft());
   const selectedLayerIdsRef = useRef([]);
+  const viewZoomRef = useRef(VIEW_ZOOM_DEFAULT);
+  const viewOffsetRef = useRef(createDefaultViewOffset());
+  const previousDocumentSizeRef = useRef({ width: 0, height: 0, hasDocument: false });
   const visualSignatureRef = useRef('');
   const layerCanvasIdsRef = useRef(new WeakMap());
   const nextLayerCanvasIdRef = useRef(1);
@@ -1098,6 +1118,10 @@ function UnifiedPhotoEditor() {
   const [aspectLocked, setAspectLocked] = useState(true);
   const [resizeDraft, setResizeDraft] = useState({ width: 0, height: 0, scale: 100 });
   const [transformDraft, setTransformDraft] = useState(createDefaultTransformDraft());
+  const [viewZoom, setViewZoom] = useState(VIEW_ZOOM_DEFAULT);
+  const [viewOffset, setViewOffset] = useState(createDefaultViewOffset);
+  const [isSpacePanning, setIsSpacePanning] = useState(false);
+  const [isViewDragging, setIsViewDragging] = useState(false);
   const [draggedLayerId, setDraggedLayerId] = useState(null);
   const [layerDropTarget, setLayerDropTarget] = useState(null);
   const [selectedLayerIds, setSelectedLayerIds] = useState([]);
@@ -1158,6 +1182,14 @@ function UnifiedPhotoEditor() {
   }, [selectedLayerIds]);
 
   useEffect(() => {
+    viewZoomRef.current = viewZoom;
+  }, [viewZoom]);
+
+  useEffect(() => {
+    viewOffsetRef.current = viewOffset;
+  }, [viewOffset]);
+
+  useEffect(() => {
     const layerIds = new Set(doc.layers.map((layer) => layer.id));
     let nextSelectedLayerIds = selectedLayerIdsRef.current.filter((layerId) => (
       layerIds.has(layerId)
@@ -1199,6 +1231,81 @@ function UnifiedPhotoEditor() {
     setTransformDraft(nextDraft);
   }, []);
 
+  const getViewBounds = useCallback((
+    targetZoom = viewZoomRef.current,
+    renderedZoom = viewZoomRef.current
+  ) => {
+    const viewport = viewportRef.current;
+    const canvas = displayCanvasRef.current;
+    if (!viewport || !canvas || !hasDocument(docRef.current)) {
+      return { maxX: 0, maxY: 0 };
+    }
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const renderedZoomFactor = Math.max(renderedZoom / 100, 0.01);
+    const targetZoomFactor = targetZoom / 100;
+    const baseWidth = canvasRect.width / renderedZoomFactor;
+    const baseHeight = canvasRect.height / renderedZoomFactor;
+    const scaledWidth = baseWidth * targetZoomFactor;
+    const scaledHeight = baseHeight * targetZoomFactor;
+
+    return {
+      maxX: Math.max(0, (scaledWidth - viewportRect.width) / 2),
+      maxY: Math.max(0, (scaledHeight - viewportRect.height) / 2),
+    };
+  }, []);
+
+  const clampViewOffset = useCallback((
+    offset,
+    targetZoom = viewZoomRef.current,
+    renderedZoom = viewZoomRef.current
+  ) => {
+    const bounds = getViewBounds(targetZoom, renderedZoom);
+    return {
+      x: clamp(offset.x, -bounds.maxX, bounds.maxX),
+      y: clamp(offset.y, -bounds.maxY, bounds.maxY),
+    };
+  }, [getViewBounds]);
+
+  const updateViewOffset = useCallback((nextOffset) => {
+    setViewOffset((current) => {
+      const rawOffset = typeof nextOffset === 'function' ? nextOffset(current) : nextOffset;
+      const clampedOffset = clampViewOffset(rawOffset);
+      viewOffsetRef.current = clampedOffset;
+      return areViewOffsetsEqual(current, clampedOffset) ? current : clampedOffset;
+    });
+  }, [clampViewOffset]);
+
+  const updateViewZoom = useCallback((nextZoom) => {
+    const renderedZoom = viewZoomRef.current;
+    const clampedZoom = clamp(Math.round(nextZoom), VIEW_ZOOM_MIN, VIEW_ZOOM_MAX);
+
+    setViewZoom(clampedZoom);
+    setViewOffset((current) => {
+      const clampedOffset = clampViewOffset(current, clampedZoom, renderedZoom);
+      viewOffsetRef.current = clampedOffset;
+      return areViewOffsetsEqual(current, clampedOffset) ? current : clampedOffset;
+    });
+    viewZoomRef.current = clampedZoom;
+  }, [clampViewOffset]);
+
+  const resetView = useCallback(() => {
+    const defaultOffset = createDefaultViewOffset();
+    viewZoomRef.current = VIEW_ZOOM_DEFAULT;
+    viewOffsetRef.current = defaultOffset;
+    setViewZoom(VIEW_ZOOM_DEFAULT);
+    setViewOffset(defaultOffset);
+  }, []);
+
+  const zoomIn = useCallback(() => {
+    updateViewZoom(viewZoomRef.current + VIEW_ZOOM_STEP);
+  }, [updateViewZoom]);
+
+  const zoomOut = useCallback(() => {
+    updateViewZoom(viewZoomRef.current - VIEW_ZOOM_STEP);
+  }, [updateViewZoom]);
+
   const getCompositeCanvas = useCallback(() => makeCompositeCanvas(doc), [doc]);
 
   const {
@@ -1227,6 +1334,7 @@ function UnifiedPhotoEditor() {
   const selectedOcrWordIdSet = useMemo(() => (
     new Set(selectedOcrWordIds)
   ), [selectedOcrWordIds]);
+  const isViewPanning = activeTool === TOOLS.PAN || isSpacePanning;
 
   useEffect(() => {
     const previousSignature = visualSignatureRef.current;
@@ -1320,6 +1428,69 @@ function UnifiedPhotoEditor() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [redoDocument, undoDocument]);
+
+  useEffect(() => {
+    const isSpaceKey = (event) => event.code === 'Space' || event.key === ' ';
+
+    const handleSpaceKeyDown = (event) => {
+      if (!isSpaceKey(event) || isEditableShortcutTarget(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!hasDocument(docRef.current)) return;
+
+      event.preventDefault();
+      if (!event.repeat) setIsSpacePanning(true);
+    };
+
+    const handleSpaceKeyUp = (event) => {
+      if (!isSpaceKey(event)) return;
+
+      event.preventDefault();
+      setIsSpacePanning(false);
+    };
+
+    const handleWindowBlur = () => {
+      setIsSpacePanning(false);
+    };
+
+    window.addEventListener('keydown', handleSpaceKeyDown);
+    window.addEventListener('keyup', handleSpaceKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', handleSpaceKeyDown);
+      window.removeEventListener('keyup', handleSpaceKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, []);
+
+  useEffect(() => {
+    const nextDocumentSize = {
+      width: documentWidth,
+      height: documentHeight,
+      hasDocument: documentWidth > 0 && documentHeight > 0 && documentLayerCount > 0,
+    };
+    const previousDocumentSize = previousDocumentSizeRef.current;
+    previousDocumentSizeRef.current = nextDocumentSize;
+
+    if (!nextDocumentSize.hasDocument) {
+      resetView();
+      return;
+    }
+
+    if (
+      !previousDocumentSize.hasDocument ||
+      previousDocumentSize.width !== nextDocumentSize.width ||
+      previousDocumentSize.height !== nextDocumentSize.height
+    ) {
+      resetView();
+    }
+  }, [documentHeight, documentLayerCount, documentWidth, resetView]);
+
+  useEffect(() => {
+    const clampOffsetToViewport = () => updateViewOffset((current) => current);
+
+    window.addEventListener('resize', clampOffsetToViewport);
+    return () => window.removeEventListener('resize', clampOffsetToViewport);
+  }, [updateViewOffset]);
 
   useEffect(() => {
     if (documentWidth <= 0 || documentHeight <= 0 || documentLayerCount === 0) {
@@ -1844,11 +2015,44 @@ function UnifiedPhotoEditor() {
     applyActiveTransform(transformDraftRef.current);
   }, [applyActiveTransform]);
 
+  const startPanInteraction = useCallback((event) => {
+    interactionRef.current = {
+      type: 'pan',
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startOffset: viewOffsetRef.current,
+    };
+    setIsViewDragging(true);
+  }, []);
+
+  const continuePanInteraction = useCallback((event) => {
+    const interaction = interactionRef.current;
+    if (!interaction || interaction.type !== 'pan') return;
+
+    updateViewOffset({
+      x: interaction.startOffset.x + event.clientX - interaction.startClientX,
+      y: interaction.startOffset.y + event.clientY - interaction.startClientY,
+    });
+  }, [updateViewOffset]);
+
+  const finishPanInteraction = useCallback(() => {
+    if (interactionRef.current?.type !== 'pan') return;
+
+    interactionRef.current = null;
+    setIsViewDragging(false);
+  }, []);
+
   const handlePointerDown = useCallback((event) => {
     if (!hasDocument(docRef.current)) return;
 
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+
+    if (isViewPanning) {
+      startPanInteraction(event);
+      return;
+    }
 
     if (activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) {
       startStroke(event);
@@ -1863,7 +2067,7 @@ function UnifiedPhotoEditor() {
     if (activeTool === TOOLS.MOVE) {
       startMoveInteraction(event);
     }
-  }, [activeTool, startCropInteraction, startMoveInteraction, startStroke]);
+  }, [activeTool, isViewPanning, startCropInteraction, startMoveInteraction, startPanInteraction, startStroke]);
 
   const handlePointerMove = useCallback((event) => {
     const interaction = interactionRef.current;
@@ -1883,8 +2087,13 @@ function UnifiedPhotoEditor() {
 
     if (interaction.type === 'move') {
       continueMoveInteraction(event);
+      return;
     }
-  }, [continueCropInteraction, continueMoveInteraction, continueStroke]);
+
+    if (interaction.type === 'pan') {
+      continuePanInteraction(event);
+    }
+  }, [continueCropInteraction, continueMoveInteraction, continuePanInteraction, continueStroke]);
 
   const handlePointerUp = useCallback((event) => {
     const interaction = interactionRef.current;
@@ -1904,8 +2113,13 @@ function UnifiedPhotoEditor() {
 
     if (interaction.type === 'move') {
       finishMoveInteraction();
+      return;
     }
-  }, [finishCropInteraction, finishMoveInteraction, finishStroke]);
+
+    if (interaction.type === 'pan') {
+      finishPanInteraction();
+    }
+  }, [finishCropInteraction, finishMoveInteraction, finishPanInteraction, finishStroke]);
 
   const applyCrop = useCallback(() => {
     const currentDoc = docRef.current;
@@ -2033,9 +2247,10 @@ function UnifiedPhotoEditor() {
     setCrop(null);
     setActiveTool(TOOLS.MOVE);
     resetTransformDraft();
+    resetView();
     resetExportState();
     clearOcr();
-  }, [clearOcr, resetExportState, resetTransformDraft, updateSelectedLayerIds]);
+  }, [clearOcr, resetExportState, resetTransformDraft, resetView, updateSelectedLayerIds]);
 
   const updateResizeWidth = useCallback((value) => {
     const width = clampDimension(value);
@@ -2263,11 +2478,13 @@ function UnifiedPhotoEditor() {
   }, [ocrDragSelection]);
 
   const toolCursor = useMemo(() => {
+    if (isViewDragging) return 'grabbing';
+    if (isViewPanning) return 'grab';
     if (activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) return 'crosshair';
     if (activeTool === TOOLS.CROP) return 'crosshair';
     if (activeTool === TOOLS.MOVE) return 'move';
     return 'default';
-  }, [activeTool]);
+  }, [activeTool, isViewDragging, isViewPanning]);
 
   const activeLayerIndex = doc.layers.findIndex((layer) => layer.id === doc.activeLayerId);
   const hasOcrText = ocrText.trim().length > 0;
@@ -2309,6 +2526,50 @@ function UnifiedPhotoEditor() {
             >
               Import
             </Button>
+            <HStack
+              spacing={1}
+              border="1px solid"
+              borderColor="gray.200"
+              borderRadius="md"
+              bg="white"
+              p={1}
+            >
+              <Tooltip label="Zoom out" hasArrow>
+                <IconButton
+                  aria-label="Zoom out"
+                  icon={<ZoomOut size={17} />}
+                  onClick={zoomOut}
+                  isDisabled={!hasDocument(doc) || viewZoom <= VIEW_ZOOM_MIN}
+                  size="sm"
+                  variant="ghost"
+                />
+              </Tooltip>
+              <Text fontSize="sm" color="gray.700" minW="48px" textAlign="center">
+                {viewZoom}%
+              </Text>
+              <Tooltip label="Reset zoom to 100%" hasArrow>
+                <Button
+                  aria-label="Reset zoom to 100%"
+                  onClick={resetView}
+                  isDisabled={!hasDocument(doc)}
+                  size="sm"
+                  variant="ghost"
+                  px={2}
+                >
+                  100%
+                </Button>
+              </Tooltip>
+              <Tooltip label="Zoom in" hasArrow>
+                <IconButton
+                  aria-label="Zoom in"
+                  icon={<ZoomIn size={17} />}
+                  onClick={zoomIn}
+                  isDisabled={!hasDocument(doc) || viewZoom >= VIEW_ZOOM_MAX}
+                  size="sm"
+                  variant="ghost"
+                />
+              </Tooltip>
+            </HStack>
             <Tooltip label="Undo" hasArrow>
               <IconButton
                 aria-label="Undo"
@@ -2364,6 +2625,7 @@ function UnifiedPhotoEditor() {
             p={2}
           >
             <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => setActiveTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => setActiveTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => setActiveTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => setActiveTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => setActiveTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
@@ -2381,6 +2643,7 @@ function UnifiedPhotoEditor() {
             p={2}
           >
             <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => setActiveTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => setActiveTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => setActiveTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => setActiveTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => setActiveTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
@@ -2393,6 +2656,7 @@ function UnifiedPhotoEditor() {
           </VStack>
 
           <Flex
+            ref={viewportRef}
             minH={{ base: '58vh', lg: 'calc(100vh - 150px)' }}
             bg="gray.900"
             border="1px solid"
@@ -2433,6 +2697,10 @@ function UnifiedPhotoEditor() {
                 maxW="100%"
                 maxH="calc(100vh - 210px)"
                 lineHeight={0}
+                transform={`translate(${viewOffset.x}px, ${viewOffset.y}px) scale(${viewZoom / 100})`}
+                transformOrigin="center center"
+                transition={isViewDragging ? undefined : 'transform 120ms ease-out'}
+                willChange="transform"
               >
                 <canvas
                   ref={displayCanvasRef}
@@ -2466,6 +2734,7 @@ function UnifiedPhotoEditor() {
                     inset={0}
                     w="100%"
                     h="100%"
+                    pointerEvents={isViewPanning ? 'none' : 'auto'}
                     cursor="text"
                     touchAction="none"
                     onPointerDown={handleOcrOverlayPointerDown}
@@ -2547,6 +2816,40 @@ function UnifiedPhotoEditor() {
                       <SliderThumb />
                     </Slider>
                   </Box>
+                </VStack>
+              )}
+
+              {hasDocument(doc) && activeTool === TOOLS.PAN && (
+                <VStack align="stretch" spacing={4}>
+                  <HStack justify="space-between">
+                    <Text fontSize="sm">View zoom</Text>
+                    <Text fontSize="sm" color="gray.600">{viewZoom}%</Text>
+                  </HStack>
+                  <HStack>
+                    <Tooltip label="Zoom out" hasArrow>
+                      <IconButton
+                        aria-label="Zoom out"
+                        icon={<ZoomOut size={16} />}
+                        onClick={zoomOut}
+                        isDisabled={viewZoom <= VIEW_ZOOM_MIN}
+                        size="sm"
+                        flex={1}
+                      />
+                    </Tooltip>
+                    <Button size="sm" onClick={resetView} flex={1}>
+                      100%
+                    </Button>
+                    <Tooltip label="Zoom in" hasArrow>
+                      <IconButton
+                        aria-label="Zoom in"
+                        icon={<ZoomIn size={16} />}
+                        onClick={zoomIn}
+                        isDisabled={viewZoom >= VIEW_ZOOM_MAX}
+                        size="sm"
+                        flex={1}
+                      />
+                    </Tooltip>
+                  </HStack>
                 </VStack>
               )}
 
