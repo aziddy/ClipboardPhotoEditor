@@ -681,6 +681,41 @@ const isPointInRect = (point, rect, padding = 0) => (
   point.y <= rect.y + rect.height + padding
 );
 
+const getSelectionRectFromPoints = (startPoint, currentPoint) => {
+  const left = Math.min(startPoint.x, currentPoint.x);
+  const top = Math.min(startPoint.y, currentPoint.y);
+  const right = Math.max(startPoint.x, currentPoint.x);
+  const bottom = Math.max(startPoint.y, currentPoint.y);
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+};
+
+const getWordRect = (word) => ({
+  x: word.bbox.x0,
+  y: word.bbox.y0,
+  width: word.bbox.x1 - word.bbox.x0,
+  height: word.bbox.y1 - word.bbox.y0,
+});
+
+const isPointInOcrWord = (point, word) => (
+  point.x >= word.bbox.x0 &&
+  point.x <= word.bbox.x1 &&
+  point.y >= word.bbox.y0 &&
+  point.y <= word.bbox.y1
+);
+
+const doesRectIntersectOcrWord = (rect, word) => (
+  rect.x <= word.bbox.x1 &&
+  rect.x + rect.width >= word.bbox.x0 &&
+  rect.y <= word.bbox.y1 &&
+  rect.y + rect.height >= word.bbox.y0
+);
+
 const isPointInTransformBox = (point, geometry, padding = 0) => {
   const local = getLocalPoint(point, geometry.center, geometry.rotationDeg);
 
@@ -1046,6 +1081,9 @@ function UnifiedPhotoEditor() {
   const cropRef = useRef(null);
   const transformDraftRef = useRef(createDefaultTransformDraft());
   const selectedLayerIdsRef = useRef([]);
+  const visualSignatureRef = useRef('');
+  const layerCanvasIdsRef = useRef(new WeakMap());
+  const nextLayerCanvasIdRef = useRef(1);
 
   const [{ doc, history, historyIndex }, dispatch] = useReducer(editorReducer, {
     doc: createEmptyDocument(),
@@ -1063,6 +1101,7 @@ function UnifiedPhotoEditor() {
   const [draggedLayerId, setDraggedLayerId] = useState(null);
   const [layerDropTarget, setLayerDropTarget] = useState(null);
   const [selectedLayerIds, setSelectedLayerIds] = useState([]);
+  const [ocrDragSelection, setOcrDragSelection] = useState(null);
 
   const activeLayer = useMemo(() => getActiveLayer(doc), [doc]);
   const selectedLayerIdSet = useMemo(() => new Set(selectedLayerIds), [selectedLayerIds]);
@@ -1075,6 +1114,32 @@ function UnifiedPhotoEditor() {
   const documentWidth = doc.width;
   const documentHeight = doc.height;
   const documentLayerCount = doc.layers.length;
+  const documentVisualSignature = useMemo(() => {
+    if (!hasDocument(doc)) return 'empty';
+
+    const layerSignatures = doc.layers.map((layer, index) => {
+      let canvasId = layerCanvasIdsRef.current.get(layer.canvas);
+      if (!canvasId) {
+        canvasId = nextLayerCanvasIdRef.current;
+        nextLayerCanvasIdRef.current += 1;
+        layerCanvasIdsRef.current.set(layer.canvas, canvasId);
+      }
+
+      return [
+        index,
+        layer.id,
+        getLayerX(layer),
+        getLayerY(layer),
+        layer.visible ? 1 : 0,
+        layer.opacity ?? 100,
+        layer.canvas.width,
+        layer.canvas.height,
+        canvasId,
+      ].join(':');
+    });
+
+    return `${doc.width}x${doc.height}|${layerSignatures.join('|')}`;
+  }, [doc]);
 
   useEffect(() => {
     docRef.current = doc;
@@ -1143,6 +1208,9 @@ function UnifiedPhotoEditor() {
   } = useImageExportControls(getCompositeCanvas, toast, 'edited');
   const {
     ocrText,
+    ocrWords,
+    selectedOcrWordIds,
+    selectedOcrText,
     ocrStatus,
     ocrStatusLabel,
     ocrProgress,
@@ -1152,8 +1220,24 @@ function UnifiedPhotoEditor() {
     runOcr,
     cancelOcr,
     clearOcr,
+    clearOcrSelection,
+    setSelectedOcrWordIds,
     setOcrText,
   } = useBrowserOcr();
+  const selectedOcrWordIdSet = useMemo(() => (
+    new Set(selectedOcrWordIds)
+  ), [selectedOcrWordIds]);
+
+  useEffect(() => {
+    const previousSignature = visualSignatureRef.current;
+    visualSignatureRef.current = documentVisualSignature;
+
+    if (!previousSignature || previousSignature === documentVisualSignature) return;
+
+    setOcrDragSelection(null);
+    cancelOcr();
+    clearOcr();
+  }, [cancelOcr, clearOcr, documentVisualSignature]);
 
   const undoDocument = useCallback(() => {
     interactionRef.current = null;
@@ -1904,6 +1988,44 @@ function UnifiedPhotoEditor() {
     }
   }, [ocrText, toast]);
 
+  const handleCopySelectedOcrText = useCallback(async () => {
+    const text = selectedOcrText.trim();
+    if (!text) return;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: 'Selection copied',
+        description: 'Selected OCR text was copied to the clipboard.',
+        status: 'success',
+        duration: 2600,
+        isClosable: true,
+      });
+    } catch (err) {
+      toast({
+        title: 'Copy failed',
+        description: 'Could not copy selected text to the clipboard.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    }
+  }, [selectedOcrText, toast]);
+
+  useEffect(() => {
+    const handleCopyShortcut = (event) => {
+      if (isEditableShortcutTarget(event.target)) return;
+      if ((!event.metaKey && !event.ctrlKey) || event.altKey) return;
+      if (event.key.toLowerCase() !== 'c' || !selectedOcrText.trim()) return;
+
+      event.preventDefault();
+      handleCopySelectedOcrText();
+    };
+
+    window.addEventListener('keydown', handleCopyShortcut);
+    return () => window.removeEventListener('keydown', handleCopyShortcut);
+  }, [handleCopySelectedOcrText, selectedOcrText]);
+
   const resetEditor = useCallback(() => {
     dispatch({ type: 'reset' });
     docRef.current = createEmptyDocument();
@@ -2050,6 +2172,96 @@ function UnifiedPhotoEditor() {
     setLayerDropTarget(null);
   }, []);
 
+  const getOcrWordAtPoint = useCallback((point) => (
+    [...ocrWords].reverse().find((word) => isPointInOcrWord(point, word)) || null
+  ), [ocrWords]);
+
+  const selectOcrWordsInRect = useCallback((rect) => {
+    const selectedWordIds = ocrWords
+      .filter((word) => doesRectIntersectOcrWord(rect, word))
+      .map((word) => word.id);
+
+    setSelectedOcrWordIds(selectedWordIds);
+  }, [ocrWords, setSelectedOcrWordIds]);
+
+  const handleOcrOverlayPointerDown = useCallback((event) => {
+    if (!ocrWords.length) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    const point = getCanvasPoint(event);
+    if (!point) return;
+
+    setOcrDragSelection({
+      pointerId: event.pointerId,
+      startPoint: point,
+      currentPoint: point,
+    });
+  }, [getCanvasPoint, ocrWords.length]);
+
+  const handleOcrOverlayPointerMove = useCallback((event) => {
+    if (!ocrDragSelection || event.pointerId !== ocrDragSelection.pointerId) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const point = getCanvasPoint(event);
+    if (!point) return;
+
+    const nextSelection = {
+      ...ocrDragSelection,
+      currentPoint: point,
+    };
+    const selectionRect = getSelectionRectFromPoints(
+      nextSelection.startPoint,
+      nextSelection.currentPoint
+    );
+
+    setOcrDragSelection(nextSelection);
+    selectOcrWordsInRect(selectionRect);
+  }, [getCanvasPoint, ocrDragSelection, selectOcrWordsInRect]);
+
+  const handleOcrOverlayPointerUp = useCallback((event) => {
+    if (!ocrDragSelection || event.pointerId !== ocrDragSelection.pointerId) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch (err) {
+      // Pointer capture may already be released by the browser.
+    }
+
+    const point = getCanvasPoint(event) || ocrDragSelection.currentPoint;
+    const distance = getDistance(ocrDragSelection.startPoint, point);
+
+    if (distance < 4) {
+      const word = getOcrWordAtPoint(point);
+      setSelectedOcrWordIds(word ? [word.id] : []);
+    } else {
+      selectOcrWordsInRect(getSelectionRectFromPoints(ocrDragSelection.startPoint, point));
+    }
+
+    setOcrDragSelection(null);
+  }, [
+    getCanvasPoint,
+    getOcrWordAtPoint,
+    ocrDragSelection,
+    selectOcrWordsInRect,
+    setSelectedOcrWordIds,
+  ]);
+
+  const handleOcrOverlayPointerCancel = useCallback((event) => {
+    if (!ocrDragSelection || event.pointerId !== ocrDragSelection.pointerId) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    setOcrDragSelection(null);
+  }, [ocrDragSelection]);
+
   const toolCursor = useMemo(() => {
     if (activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) return 'crosshair';
     if (activeTool === TOOLS.CROP) return 'crosshair';
@@ -2059,6 +2271,10 @@ function UnifiedPhotoEditor() {
 
   const activeLayerIndex = doc.layers.findIndex((layer) => layer.id === doc.activeLayerId);
   const hasOcrText = ocrText.trim().length > 0;
+  const hasSelectedOcrText = selectedOcrText.trim().length > 0;
+  const ocrSelectionRect = ocrDragSelection
+    ? getSelectionRectFromPoints(ocrDragSelection.startPoint, ocrDragSelection.currentPoint)
+    : null;
 
   return (
     <Box
@@ -2211,27 +2427,88 @@ function UnifiedPhotoEditor() {
                 </Button>
               </VStack>
             ) : (
-              <canvas
-                ref={displayCanvasRef}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerCancel={handlePointerUp}
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: 'calc(100vh - 210px)',
-                  width: 'auto',
-                  height: 'auto',
-                  display: 'block',
-                  cursor: toolCursor,
-                  touchAction: 'none',
-                  backgroundColor: '#f8fafc',
-                  backgroundImage:
-                    'linear-gradient(45deg, #e2e8f0 25%, transparent 25%), linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e2e8f0 75%), linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)',
-                  backgroundSize: '18px 18px',
-                  backgroundPosition: '0 0, 0 9px, 9px -9px, -9px 0px',
-                }}
-              />
+              <Box
+                position="relative"
+                display="inline-block"
+                maxW="100%"
+                maxH="calc(100vh - 210px)"
+                lineHeight={0}
+              >
+                <canvas
+                  ref={displayCanvasRef}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerUp}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: 'calc(100vh - 210px)',
+                    width: 'auto',
+                    height: 'auto',
+                    display: 'block',
+                    cursor: toolCursor,
+                    touchAction: 'none',
+                    backgroundColor: '#f8fafc',
+                    backgroundImage:
+                      'linear-gradient(45deg, #e2e8f0 25%, transparent 25%), linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e2e8f0 75%), linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)',
+                    backgroundSize: '18px 18px',
+                    backgroundPosition: '0 0, 0 9px, 9px -9px, -9px 0px',
+                  }}
+                />
+
+                {ocrWords.length > 0 && (
+                  <Box
+                    as="svg"
+                    aria-label="OCR text selection overlay"
+                    viewBox={`0 0 ${doc.width} ${doc.height}`}
+                    preserveAspectRatio="none"
+                    position="absolute"
+                    inset={0}
+                    w="100%"
+                    h="100%"
+                    cursor="text"
+                    touchAction="none"
+                    onPointerDown={handleOcrOverlayPointerDown}
+                    onPointerMove={handleOcrOverlayPointerMove}
+                    onPointerUp={handleOcrOverlayPointerUp}
+                    onPointerCancel={handleOcrOverlayPointerCancel}
+                  >
+                    {ocrWords.map((word) => {
+                      const rect = getWordRect(word);
+                      const isSelected = selectedOcrWordIdSet.has(word.id);
+
+                      return (
+                        <rect
+                          key={word.id}
+                          x={rect.x}
+                          y={rect.y}
+                          width={rect.width}
+                          height={rect.height}
+                          rx={2}
+                          fill={isSelected ? 'rgba(37, 99, 235, 0.28)' : 'rgba(59, 130, 246, 0.08)'}
+                          stroke={isSelected ? '#1d4ed8' : 'rgba(37, 99, 235, 0.58)'}
+                          strokeWidth={isSelected ? 2 : 1}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      );
+                    })}
+
+                    {ocrSelectionRect && (
+                      <rect
+                        x={ocrSelectionRect.x}
+                        y={ocrSelectionRect.y}
+                        width={ocrSelectionRect.width}
+                        height={ocrSelectionRect.height}
+                        fill="rgba(37, 99, 235, 0.16)"
+                        stroke="#1d4ed8"
+                        strokeWidth={1.5}
+                        strokeDasharray="5 4"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    )}
+                  </Box>
+                )}
+              </Box>
             )}
           </Flex>
 
@@ -2570,27 +2847,24 @@ function UnifiedPhotoEditor() {
               <HStack mb={3}>
                 <ScanText size={18} />
                 <Text fontWeight="bold">OCR</Text>
+                <Tooltip
+                  label="OCR runs locally in your browser against the current canvas. The image is not uploaded; only the OCR engine and English language data may download and cache in your browser."
+                  hasArrow
+                  placement="top"
+                >
+                  <Box
+                    as="span"
+                    display="inline-flex"
+                    alignItems="center"
+                    color="gray.500"
+                    cursor="help"
+                    tabIndex={0}
+                  >
+                    <Info size={15} />
+                  </Box>
+                </Tooltip>
                 <Flex flex="1" />
                 <Badge colorScheme="gray">English</Badge>
-              </HStack>
-
-              <HStack
-                align="flex-start"
-                spacing={2}
-                bg="blue.50"
-                border="1px solid"
-                borderColor="blue.100"
-                borderRadius="md"
-                color="blue.900"
-                p={3}
-                mb={3}
-              >
-                <Box flexShrink={0} pt="2px">
-                  <Info size={15} />
-                </Box>
-                <Text fontSize="sm">
-                  OCR runs locally in your browser against the current canvas. The image is not uploaded; only the OCR engine and English language data may download and cache in your browser.
-                </Text>
               </HStack>
 
               {!hasDocument(doc) ? (
@@ -2662,13 +2936,35 @@ function UnifiedPhotoEditor() {
                     fontSize="sm"
                   />
 
+                  {selectedOcrWordIds.length > 0 && (
+                    <HStack justify="space-between">
+                      <Text fontSize="sm" color="gray.600">
+                        {selectedOcrWordIds.length} word{selectedOcrWordIds.length === 1 ? '' : 's'} selected
+                      </Text>
+                      <Button size="xs" variant="ghost" onClick={clearOcrSelection}>
+                        Clear Selection
+                      </Button>
+                    </HStack>
+                  )}
+
+                  <Button
+                    leftIcon={<Copy size={16} />}
+                    size="sm"
+                    colorScheme="blue"
+                    variant="outline"
+                    onClick={handleCopySelectedOcrText}
+                    isDisabled={!hasSelectedOcrText}
+                  >
+                    Copy Selection
+                  </Button>
+
                   <Button
                     leftIcon={<Copy size={16} />}
                     size="sm"
                     onClick={handleCopyOcrText}
                     isDisabled={!hasOcrText}
                   >
-                    Copy Text
+                    Copy All Text
                   </Button>
                 </VStack>
               )}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const TESSERACT_VERSION = '7.0.0';
 const OCR_MIN_LONG_EDGE = 1600;
@@ -7,12 +7,84 @@ const OCR_CANCELED_MESSAGE = 'OCR was canceled.';
 
 const createInitialOcrState = () => ({
   text: '',
+  words: [],
+  selectedWordIds: [],
   status: 'idle',
   statusLabel: '',
   progress: 0,
   error: '',
   confidence: null,
 });
+
+const getSelectedOcrText = (words, selectedWordIds) => {
+  if (!words.length || !selectedWordIds.length) return '';
+
+  const selectedWordIdSet = new Set(selectedWordIds);
+  const selectedWords = words
+    .filter((word) => selectedWordIdSet.has(word.id))
+    .sort((first, second) => first.order - second.order);
+
+  const lines = [];
+  let currentLineId = null;
+  let currentLineWords = [];
+
+  selectedWords.forEach((word) => {
+    if (currentLineId !== word.lineId) {
+      if (currentLineWords.length) {
+        lines.push(currentLineWords.join(' '));
+      }
+      currentLineId = word.lineId;
+      currentLineWords = [];
+    }
+
+    currentLineWords.push(word.text);
+  });
+
+  if (currentLineWords.length) {
+    lines.push(currentLineWords.join(' '));
+  }
+
+  return lines.join('\n');
+};
+
+const normalizeBbox = (bbox, scale) => ({
+  x0: bbox.x0 / scale,
+  y0: bbox.y0 / scale,
+  x1: bbox.x1 / scale,
+  y1: bbox.y1 / scale,
+});
+
+const normalizeOcrWords = (blocks, scale) => {
+  if (!Array.isArray(blocks)) return [];
+
+  const words = [];
+  blocks.forEach((block, blockIndex) => {
+    block.paragraphs?.forEach((paragraph, paragraphIndex) => {
+      paragraph.lines?.forEach((line, lineIndex) => {
+        const lineId = `line-${blockIndex}-${paragraphIndex}-${lineIndex}`;
+
+        line.words?.forEach((word, wordIndex) => {
+          const text = word.text?.trim();
+          if (!text || !word.bbox) return;
+
+          const bbox = normalizeBbox(word.bbox, scale);
+          if (bbox.x1 <= bbox.x0 || bbox.y1 <= bbox.y0) return;
+
+          words.push({
+            id: `word-${blockIndex}-${paragraphIndex}-${lineIndex}-${wordIndex}`,
+            text,
+            confidence: Number.isFinite(word.confidence) ? Math.round(word.confidence) : null,
+            bbox,
+            lineId,
+            order: words.length,
+          });
+        });
+      });
+    });
+  });
+
+  return words;
+};
 
 const formatStatusLabel = (status) => {
   if (!status) return 'Processing';
@@ -56,7 +128,10 @@ const prepareCanvasForOcr = (sourceCanvas) => {
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(sourceCanvas, 0, 0, canvas.width, canvas.height);
 
-  return canvas;
+  return {
+    canvas,
+    scale,
+  };
 };
 
 export const useBrowserOcr = () => {
@@ -146,8 +221,8 @@ export const useBrowserOcr = () => {
       throw new Error('OCR is already running.');
     }
 
-    const ocrCanvas = prepareCanvasForOcr(sourceCanvas);
-    if (!ocrCanvas) {
+    const preparedOcrCanvas = prepareCanvasForOcr(sourceCanvas);
+    if (!preparedOcrCanvas) {
       throw new Error('No image is available for OCR.');
     }
 
@@ -172,8 +247,16 @@ export const useBrowserOcr = () => {
         progress: Math.max(current.progress, 1),
       }));
 
-      const result = await worker.recognize(ocrCanvas);
+      const result = await worker.recognize(
+        preparedOcrCanvas.canvas,
+        {},
+        {
+          text: true,
+          blocks: true,
+        }
+      );
       const text = result?.data?.text?.trim() || '';
+      const words = normalizeOcrWords(result?.data?.blocks, preparedOcrCanvas.scale);
       const confidence = Number.isFinite(result?.data?.confidence)
         ? Math.round(result.data.confidence)
         : null;
@@ -181,6 +264,8 @@ export const useBrowserOcr = () => {
       safeSetOcrState((current) => ({
         ...current,
         text,
+        words,
+        selectedWordIds: [],
         status: 'succeeded',
         statusLabel: text ? 'Text Recognized' : 'No Text Found',
         progress: 100,
@@ -231,6 +316,20 @@ export const useBrowserOcr = () => {
     }));
   }, [safeSetOcrState]);
 
+  const setSelectedOcrWordIds = useCallback((wordIds) => {
+    safeSetOcrState((current) => ({
+      ...current,
+      selectedWordIds: Array.from(new Set(wordIds)),
+    }));
+  }, [safeSetOcrState]);
+
+  const clearOcrSelection = useCallback(() => {
+    safeSetOcrState((current) => ({
+      ...current,
+      selectedWordIds: [],
+    }));
+  }, [safeSetOcrState]);
+
   const cancelOcr = useCallback(async () => {
     if (!isRunningRef.current && !workerPromiseRef.current) return;
 
@@ -258,8 +357,15 @@ export const useBrowserOcr = () => {
     };
   }, [terminateWorker]);
 
+  const selectedOcrText = useMemo(() => (
+    getSelectedOcrText(ocrState.words, ocrState.selectedWordIds)
+  ), [ocrState.selectedWordIds, ocrState.words]);
+
   return {
     ocrText: ocrState.text,
+    ocrWords: ocrState.words,
+    selectedOcrWordIds: ocrState.selectedWordIds,
+    selectedOcrText,
     ocrStatus: ocrState.status,
     ocrStatusLabel: ocrState.statusLabel,
     ocrProgress: ocrState.progress,
@@ -269,6 +375,8 @@ export const useBrowserOcr = () => {
     runOcr,
     cancelOcr,
     clearOcr,
+    clearOcrSelection,
+    setSelectedOcrWordIds,
     setOcrText,
   };
 };
