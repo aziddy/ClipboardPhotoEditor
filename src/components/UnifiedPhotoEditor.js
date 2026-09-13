@@ -1113,7 +1113,7 @@ function UnifiedPhotoEditor() {
   const selectedLayerIdsRef = useRef([]);
   const viewZoomRef = useRef(VIEW_ZOOM_DEFAULT);
   const viewOffsetRef = useRef(createDefaultViewOffset());
-  const previousDocumentSizeRef = useRef({ width: 0, height: 0, hasDocument: false });
+  const previousHasDocumentRef = useRef(false);
   const visualSignatureRef = useRef('');
   const layerCanvasIdsRef = useRef(new WeakMap());
   const nextLayerCanvasIdRef = useRef(1);
@@ -1482,24 +1482,11 @@ function UnifiedPhotoEditor() {
   }, []);
 
   useEffect(() => {
-    const nextDocumentSize = {
-      width: documentWidth,
-      height: documentHeight,
-      hasDocument: documentWidth > 0 && documentHeight > 0 && documentLayerCount > 0,
-    };
-    const previousDocumentSize = previousDocumentSizeRef.current;
-    previousDocumentSizeRef.current = nextDocumentSize;
+    const documentExists = documentWidth > 0 && documentHeight > 0 && documentLayerCount > 0;
+    const previouslyHadDocument = previousHasDocumentRef.current;
+    previousHasDocumentRef.current = documentExists;
 
-    if (!nextDocumentSize.hasDocument) {
-      resetView();
-      return;
-    }
-
-    if (
-      !previousDocumentSize.hasDocument ||
-      previousDocumentSize.width !== nextDocumentSize.width ||
-      previousDocumentSize.height !== nextDocumentSize.height
-    ) {
+    if (!documentExists || !previouslyHadDocument) {
       resetView();
     }
   }, [documentHeight, documentLayerCount, documentWidth, resetView]);
@@ -2727,7 +2714,8 @@ function UnifiedPhotoEditor() {
               <Box
                 position="relative"
                 display="inline-block"
-                maxW="100%"
+                w="100%"
+                maxW={`calc((100vh - 210px) * ${displayWidth / displayHeight})`}
                 maxH="calc(100vh - 210px)"
                 lineHeight={0}
                 transform={`translate(${viewOffset.x}px, ${viewOffset.y}px) scale(${viewZoom / 100})`}
@@ -2744,7 +2732,7 @@ function UnifiedPhotoEditor() {
                   style={{
                     maxWidth: '100%',
                     maxHeight: 'calc(100vh - 210px)',
-                    width: 'auto',
+                    width: '100%',
                     height: 'auto',
                     display: 'block',
                     cursor: toolCursor,
