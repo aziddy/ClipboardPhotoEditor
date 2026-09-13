@@ -4,7 +4,10 @@ Paste or import an image, edit it in one unified canvas, and copy or download th
 The editor supports raster layers, drawing, erasing, cropping, resizing, layer ordering, opacity, visibility, undo, redo, clipboard export, and PNG/JPEG downloads from a single workspace.
 
 ## SSL Certificates Setup
-This project uses HTTPS locally for secure development. Follow these steps to set up SSL certificates:
+
+Copying images to the clipboard requires a secure page, and SSL certificates enable HTTPS locally. Browsers also trust `http://localhost`, so certificates are optional if you set `HTTPS=false` in `.env`.
+
+Follow these steps to set up SSL certificates for local HTTPS:
 
 1. Install mkcert:
 - On macOS with Homebrew:

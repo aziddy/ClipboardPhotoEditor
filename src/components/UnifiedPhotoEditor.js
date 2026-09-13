@@ -216,7 +216,14 @@ const createImageLayer = (image, doc, layerNumber) => {
   });
 };
 
-const renderLayer = (ctx, layer, transformDraft = null) => {
+const getResizedLayerRect = (layer, scaleX, scaleY) => ({
+  width: clampDimension(layer.canvas.width * scaleX),
+  height: clampDimension(layer.canvas.height * scaleY),
+  x: Math.round(getLayerX(layer) * scaleX),
+  y: Math.round(getLayerY(layer) * scaleY),
+});
+
+const renderLayer = (ctx, layer, transformDraft = null, resizeScale = null) => {
   const opacity = clamp(layer.opacity ?? 100, 0, 100) / 100;
   if (!layer.visible || opacity <= 0) return;
 
@@ -225,6 +232,10 @@ const renderLayer = (ctx, layer, transformDraft = null) => {
 
   if (transformDraft && hasTransform(transformDraft)) {
     drawTransformedLayer(ctx, layer, transformDraft);
+  } else if (resizeScale) {
+    const rect = getResizedLayerRect(layer, resizeScale.x, resizeScale.y);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(layer.canvas, rect.x, rect.y, rect.width, rect.height);
   } else {
     ctx.drawImage(layer.canvas, getLayerX(layer), getLayerY(layer));
   }
@@ -233,7 +244,11 @@ const renderLayer = (ctx, layer, transformDraft = null) => {
 };
 
 const renderDocument = (ctx, doc, options = {}) => {
-  ctx.clearRect(0, 0, doc.width, doc.height);
+  const dimensions = options.resizeDimensions || doc;
+  const resizeScale = options.resizeDimensions
+    ? { x: dimensions.width / doc.width, y: dimensions.height / doc.height }
+    : null;
+  ctx.clearRect(0, 0, dimensions.width, dimensions.height);
 
   doc.layers.forEach((layer) => {
     const shouldTransform = options.transformLayerIds
@@ -242,7 +257,7 @@ const renderDocument = (ctx, doc, options = {}) => {
     const transformDraft = shouldTransform
       ? options.transformDraft
       : null;
-    renderLayer(ctx, layer, transformDraft);
+    renderLayer(ctx, layer, transformDraft, resizeScale);
   });
 };
 
@@ -879,10 +894,8 @@ const resizeDocument = (doc, width, height) => {
   const scaleY = nextHeight / doc.height;
 
   const layers = doc.layers.map((layer) => {
-    const canvas = createCanvas(
-      Math.max(1, Math.round(layer.canvas.width * scaleX)),
-      Math.max(1, Math.round(layer.canvas.height * scaleY))
-    );
+    const rect = getResizedLayerRect(layer, scaleX, scaleY);
+    const canvas = createCanvas(rect.width, rect.height);
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(layer.canvas, 0, 0, canvas.width, canvas.height);
@@ -890,8 +903,8 @@ const resizeDocument = (doc, width, height) => {
     return {
       ...layer,
       canvas,
-      x: Math.round(getLayerX(layer) * scaleX),
-      y: Math.round(getLayerY(layer) * scaleY),
+      x: rect.x,
+      y: rect.y,
     };
   });
 
@@ -1138,6 +1151,11 @@ function UnifiedPhotoEditor() {
   const documentWidth = doc.width;
   const documentHeight = doc.height;
   const documentLayerCount = doc.layers.length;
+  const isResizePreview = activeTool === TOOLS.RESIZE && hasDocument(doc) && (
+    resizeDraft.width !== doc.width || resizeDraft.height !== doc.height
+  );
+  const displayWidth = isResizePreview ? clampDimension(resizeDraft.width) : doc.width;
+  const displayHeight = isResizePreview ? clampDimension(resizeDraft.height) : doc.height;
   const documentVisualSignature = useMemo(() => {
     if (!hasDocument(doc)) return 'empty';
 
@@ -1363,8 +1381,8 @@ function UnifiedPhotoEditor() {
     const canvas = displayCanvasRef.current;
     if (!canvas || !hasDocument(doc)) return;
 
-    if (canvas.width !== doc.width) canvas.width = doc.width;
-    if (canvas.height !== doc.height) canvas.height = doc.height;
+    if (canvas.width !== displayWidth) canvas.width = displayWidth;
+    if (canvas.height !== displayHeight) canvas.height = displayHeight;
 
     const ctx = canvas.getContext('2d');
     const isGroupMove = activeTool === TOOLS.MOVE && hasMultiLayerSelection;
@@ -1376,6 +1394,7 @@ function UnifiedPhotoEditor() {
       ? new Set(selectedMoveLayers.map((layer) => layer.id))
       : null;
     renderDocument(ctx, doc, {
+      resizeDimensions: isResizePreview ? { width: displayWidth, height: displayHeight } : null,
       transformLayerId,
       transformLayerIds,
       transformDraft: transformDraftForRender,
@@ -1390,7 +1409,7 @@ function UnifiedPhotoEditor() {
     if (activeTool === TOOLS.CROP) {
       drawCropOverlay(ctx, doc, crop);
     }
-  }, [activeLayer, activeTool, crop, doc, hasMultiLayerSelection, selectedMoveLayers, transformDraft]);
+  }, [activeLayer, activeTool, crop, displayHeight, displayWidth, doc, hasMultiLayerSelection, isResizePreview, selectedMoveLayers, transformDraft]);
 
   useEffect(() => {
     renderDisplay();
@@ -1488,9 +1507,10 @@ function UnifiedPhotoEditor() {
   useEffect(() => {
     const clampOffsetToViewport = () => updateViewOffset((current) => current);
 
+    clampOffsetToViewport();
     window.addEventListener('resize', clampOffsetToViewport);
     return () => window.removeEventListener('resize', clampOffsetToViewport);
-  }, [updateViewOffset]);
+  }, [displayHeight, displayWidth, updateViewOffset]);
 
   useEffect(() => {
     if (documentWidth <= 0 || documentHeight <= 0 || documentLayerCount === 0) {
@@ -2657,6 +2677,7 @@ function UnifiedPhotoEditor() {
 
           <Flex
             ref={viewportRef}
+            position="relative"
             minH={{ base: '58vh', lg: 'calc(100vh - 150px)' }}
             bg="gray.900"
             border="1px solid"
@@ -2667,6 +2688,18 @@ function UnifiedPhotoEditor() {
             overflow="hidden"
             p={{ base: 3, md: 5 }}
           >
+            {isResizePreview && (
+              <Badge
+                position="absolute"
+                top={3}
+                left={3}
+                zIndex={1}
+                colorScheme="blue"
+                pointerEvents="none"
+              >
+                Resize preview: {displayWidth} x {displayHeight}px
+              </Badge>
+            )}
             {!hasDocument(doc) ? (
               <VStack
                 spacing={4}
@@ -2950,10 +2983,14 @@ function UnifiedPhotoEditor() {
 
               {hasDocument(doc) && activeTool === TOOLS.RESIZE && (
                 <VStack align="stretch" spacing={4}>
+                  <Text fontSize="sm" color="gray.600">
+                    Preview updates as you change dimensions. Apply Resize to save the change.
+                  </Text>
                   <HStack>
                     <Box flex={1}>
                       <Text fontSize="sm" mb={1}>Width</Text>
                       <Input
+                        aria-label="Resize width"
                         type="number"
                         min={MIN_DIMENSION}
                         max={MAX_DIMENSION}
@@ -2964,6 +3001,7 @@ function UnifiedPhotoEditor() {
                     <Box flex={1}>
                       <Text fontSize="sm" mb={1}>Height</Text>
                       <Input
+                        aria-label="Resize height"
                         type="number"
                         min={MIN_DIMENSION}
                         max={MAX_DIMENSION}
@@ -2974,14 +3012,14 @@ function UnifiedPhotoEditor() {
                   </HStack>
                   <HStack justify="space-between">
                     <Text fontSize="sm">Lock aspect</Text>
-                    <Switch isChecked={aspectLocked} onChange={(event) => setAspectLocked(event.target.checked)} />
+                    <Switch aria-label="Lock aspect ratio" isChecked={aspectLocked} onChange={(event) => setAspectLocked(event.target.checked)} />
                   </HStack>
                   <Box>
                     <HStack justify="space-between" mb={2}>
                       <Text fontSize="sm">Scale</Text>
                       <Text fontSize="sm" color="gray.600">{resizeDraft.scale}%</Text>
                     </HStack>
-                    <Slider value={resizeDraft.scale} min={1} max={200} onChange={updateResizeScale}>
+                    <Slider aria-label="Resize scale" value={resizeDraft.scale} min={1} max={200} onChange={updateResizeScale}>
                       <SliderTrack><SliderFilledTrack /></SliderTrack>
                       <SliderThumb />
                     </Slider>
