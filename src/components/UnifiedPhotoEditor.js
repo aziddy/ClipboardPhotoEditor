@@ -2508,7 +2508,7 @@ function UnifiedPhotoEditor() {
       onDrop={handleDrop}
       onDragOver={(event) => event.preventDefault()}
     >
-      <VStack spacing={4} align="stretch" maxW="1680px" mx="auto" p={{ base: 3, md: 5 }}>
+      <VStack spacing={4} align="stretch" w="100%" p={{ base: 3, md: 5 }}>
         <Flex gap={3} align="center" wrap="wrap">
           <Box>
             <Text fontSize={{ base: 'xl', md: '2xl' }} fontWeight="bold">
