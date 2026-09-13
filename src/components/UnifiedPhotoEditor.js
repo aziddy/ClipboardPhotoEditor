@@ -60,9 +60,44 @@ import {
 } from 'lucide-react';
 import { useImageExportControls } from '../utils/useImageExportControls';
 import { useBrowserOcr } from '../utils/useBrowserOcr';
+import {
+  MAX_DIMENSION,
+  applyLayerTransform,
+  beginLayerStroke,
+  clamp,
+  clampDimension,
+  cloneLayer,
+  continueLayerStroke,
+  createDefaultTransformDraft,
+  createEmptyDocument,
+  createImageLayer,
+  createLayer,
+  createLayerId,
+  cropDocument,
+  cropFromEdges,
+  editorReducer,
+  finishLayerStroke,
+  getActiveLayer,
+  getDraftRotation,
+  getDraftScaleX,
+  getDraftScaleY,
+  getLayerDocumentBounds,
+  getLayerGroupBounds,
+  getLocalPoint,
+  getTransformedGeometry,
+  hasDocument,
+  hasTransform,
+  makeCompositeCanvas,
+  normalizeRotation,
+  renderDocument,
+  renderLayerThumbnail,
+  resizeDocument,
+  rotateLocalPoint,
+  toDegrees,
+  translateLayer,
+  updateLayer,
+} from '../utils/editorLayers';
 
-const HISTORY_LIMIT = 30;
-const MAX_DIMENSION = 12000;
 const MIN_DIMENSION = 1;
 const DEFAULT_BRUSH_COLOR = '#ff2b2b';
 const LAYER_DRAG_TYPE = 'application/x-clipboard-photo-layer';
@@ -95,180 +130,11 @@ const TOOL_SHORTCUTS = {
 
 const TRANSFORM_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
-const createDefaultTransformDraft = () => ({
-  dx: 0,
-  dy: 0,
-  scaleX: 100,
-  scaleY: 100,
-  rotationDeg: 0,
-});
-
-const createEmptyDocument = () => ({
-  width: 0,
-  height: 0,
-  layers: [],
-  activeLayerId: null,
-});
-
-const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
-
-const clampDimension = (value) => {
-  const number = Math.round(Number(value));
-  if (!Number.isFinite(number)) return MIN_DIMENSION;
-  return clamp(number, MIN_DIMENSION, MAX_DIMENSION);
-};
-
 const createDefaultViewOffset = () => ({ x: 0, y: 0 });
 
 const areViewOffsetsEqual = (first, second) => (
   first.x === second.x && first.y === second.y
 );
-
-const createCanvas = (width, height) => {
-  const canvas = document.createElement('canvas');
-  canvas.width = clampDimension(width);
-  canvas.height = clampDimension(height);
-  return canvas;
-};
-
-const cloneCanvas = (sourceCanvas) => {
-  const canvas = createCanvas(sourceCanvas.width, sourceCanvas.height);
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(sourceCanvas, 0, 0);
-  return canvas;
-};
-
-const cloneLayer = (layer) => ({
-  ...layer,
-  canvas: cloneCanvas(layer.canvas),
-});
-
-const cloneDocument = (doc) => ({
-  width: doc.width,
-  height: doc.height,
-  activeLayerId: doc.activeLayerId,
-  layers: doc.layers.map(cloneLayer),
-});
-
-const hasDocument = (doc) => doc.width > 0 && doc.height > 0 && doc.layers.length > 0;
-
-const getActiveLayer = (doc) => (
-  doc.layers.find((layer) => layer.id === doc.activeLayerId) || null
-);
-
-const createLayerId = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return `layer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-};
-
-const getLayerX = (layer) => layer.x ?? 0;
-
-const getLayerY = (layer) => layer.y ?? 0;
-
-const createLayer = ({ name, width, height, x = 0, y = 0, draw }) => {
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-  if (draw) {
-    draw(ctx, canvas);
-  }
-
-  return {
-    id: createLayerId(),
-    name,
-    canvas,
-    x,
-    y,
-    visible: true,
-    opacity: 100,
-  };
-};
-
-const getFittedImageRect = (image, width, height) => {
-  const scale = Math.min(1, width / image.naturalWidth, height / image.naturalHeight);
-  const drawWidth = Math.max(1, Math.round(image.naturalWidth * scale));
-  const drawHeight = Math.max(1, Math.round(image.naturalHeight * scale));
-
-  return {
-    x: Math.round((width - drawWidth) / 2),
-    y: Math.round((height - drawHeight) / 2),
-    width: drawWidth,
-    height: drawHeight,
-  };
-};
-
-const createImageLayer = (image, doc, layerNumber) => {
-  const isNewDocument = !hasDocument(doc);
-  const rect = isNewDocument
-    ? { x: 0, y: 0, width: image.naturalWidth, height: image.naturalHeight }
-    : getFittedImageRect(image, doc.width, doc.height);
-
-  return createLayer({
-    name: isNewDocument ? 'Background' : `Image ${layerNumber}`,
-    width: rect.width,
-    height: rect.height,
-    x: rect.x,
-    y: rect.y,
-    draw: (ctx) => {
-      ctx.drawImage(image, 0, 0, rect.width, rect.height);
-    },
-  });
-};
-
-const getResizedLayerRect = (layer, scaleX, scaleY) => ({
-  width: clampDimension(layer.canvas.width * scaleX),
-  height: clampDimension(layer.canvas.height * scaleY),
-  x: Math.round(getLayerX(layer) * scaleX),
-  y: Math.round(getLayerY(layer) * scaleY),
-});
-
-const renderLayer = (ctx, layer, transformDraft = null, resizeScale = null) => {
-  const opacity = clamp(layer.opacity ?? 100, 0, 100) / 100;
-  if (!layer.visible || opacity <= 0) return;
-
-  ctx.save();
-  ctx.globalAlpha = opacity;
-
-  if (transformDraft && hasTransform(transformDraft)) {
-    drawTransformedLayer(ctx, layer, transformDraft);
-  } else if (resizeScale) {
-    const rect = getResizedLayerRect(layer, resizeScale.x, resizeScale.y);
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(layer.canvas, rect.x, rect.y, rect.width, rect.height);
-  } else {
-    ctx.drawImage(layer.canvas, getLayerX(layer), getLayerY(layer));
-  }
-
-  ctx.restore();
-};
-
-const renderDocument = (ctx, doc, options = {}) => {
-  const dimensions = options.resizeDimensions || doc;
-  const resizeScale = options.resizeDimensions
-    ? { x: dimensions.width / doc.width, y: dimensions.height / doc.height }
-    : null;
-  ctx.clearRect(0, 0, dimensions.width, dimensions.height);
-
-  doc.layers.forEach((layer) => {
-    const shouldTransform = options.transformLayerIds
-      ? options.transformLayerIds.has(layer.id)
-      : layer.id === options.transformLayerId;
-    const transformDraft = shouldTransform
-      ? options.transformDraft
-      : null;
-    renderLayer(ctx, layer, transformDraft, resizeScale);
-  });
-};
-
-const makeCompositeCanvas = (doc) => {
-  if (!hasDocument(doc)) return null;
-
-  const canvas = createCanvas(doc.width, doc.height);
-  const ctx = canvas.getContext('2d');
-  renderDocument(ctx, doc);
-  return canvas;
-};
 
 const createDefaultCrop = (doc) => {
   const insetX = Math.max(1, Math.round(doc.width * 0.1));
@@ -281,36 +147,6 @@ const createDefaultCrop = (doc) => {
     y: insetY,
     width,
     height,
-  };
-};
-
-const cropFromEdges = (left, top, right, bottom, doc) => {
-  let nextLeft = clamp(Math.min(left, right), 0, Math.max(0, doc.width - 1));
-  let nextRight = clamp(Math.max(left, right), 1, doc.width);
-  let nextTop = clamp(Math.min(top, bottom), 0, Math.max(0, doc.height - 1));
-  let nextBottom = clamp(Math.max(top, bottom), 1, doc.height);
-
-  if (nextRight - nextLeft < 1) {
-    if (nextRight >= doc.width) {
-      nextLeft = Math.max(0, nextRight - 1);
-    } else {
-      nextRight = Math.min(doc.width, nextLeft + 1);
-    }
-  }
-
-  if (nextBottom - nextTop < 1) {
-    if (nextBottom >= doc.height) {
-      nextTop = Math.max(0, nextBottom - 1);
-    } else {
-      nextBottom = Math.min(doc.height, nextTop + 1);
-    }
-  }
-
-  return {
-    x: Math.round(nextLeft),
-    y: Math.round(nextTop),
-    width: Math.round(nextRight - nextLeft),
-    height: Math.round(nextBottom - nextTop),
   };
 };
 
@@ -408,250 +244,11 @@ const drawCropOverlay = (ctx, doc, crop) => {
   ctx.restore();
 };
 
-const getLayerBounds = (canvas) => {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const { width, height } = canvas;
-  let pixels;
-
-  try {
-    pixels = ctx.getImageData(0, 0, width, height).data;
-  } catch (err) {
-    return {
-      x: 0,
-      y: 0,
-      width,
-      height,
-    };
-  }
-
-  let minX = width;
-  let minY = height;
-  let maxX = -1;
-  let maxY = -1;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const alpha = pixels[(y * width + x) * 4 + 3];
-      if (alpha > 0) {
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x);
-        maxY = Math.max(maxY, y);
-      }
-    }
-  }
-
-  if (maxX === -1) return null;
-
-  return {
-    x: minX,
-    y: minY,
-    width: maxX - minX + 1,
-    height: maxY - minY + 1,
-  };
-};
-
-const toRadians = (degrees) => degrees * Math.PI / 180;
-
-const toDegrees = (radians) => radians * 180 / Math.PI;
-
-const normalizeRotation = (degrees) => {
-  let normalized = degrees % 360;
-  if (normalized > 180) normalized -= 360;
-  if (normalized < -180) normalized += 360;
-  return normalized;
-};
-
-const getDraftScaleX = (draft) => draft.scaleX ?? draft.scale ?? 100;
-
-const getDraftScaleY = (draft) => draft.scaleY ?? draft.scale ?? 100;
-
-const getDraftRotation = (draft) => draft.rotationDeg ?? 0;
-
-const hasTransform = (draft) => (
-  Math.round(draft.dx) !== 0 ||
-  Math.round(draft.dy) !== 0 ||
-  Math.round(getDraftScaleX(draft)) !== 100 ||
-  Math.round(getDraftScaleY(draft)) !== 100 ||
-  Math.round(getDraftRotation(draft)) !== 0
-);
-
-const getLayerDocumentBounds = (layer) => {
-  const bounds = getLayerBounds(layer.canvas);
-  if (!bounds) return null;
-
-  return {
-    x: getLayerX(layer) + bounds.x,
-    y: getLayerY(layer) + bounds.y,
-    width: bounds.width,
-    height: bounds.height,
-  };
-};
-
-const getLayerGroupBounds = (layers) => {
-  const bounds = layers.map(getLayerDocumentBounds).filter(Boolean);
-  if (bounds.length === 0) return null;
-
-  const left = Math.min(...bounds.map((rect) => rect.x));
-  const top = Math.min(...bounds.map((rect) => rect.y));
-  const right = Math.max(...bounds.map((rect) => rect.x + rect.width));
-  const bottom = Math.max(...bounds.map((rect) => rect.y + rect.height));
-
-  return {
-    x: left,
-    y: top,
-    width: right - left,
-    height: bottom - top,
-  };
-};
-
 const getTranslationDraft = (draft) => ({
   ...createDefaultTransformDraft(),
   dx: draft?.dx ?? 0,
   dy: draft?.dy ?? 0,
 });
-
-const rotateLocalPoint = (center, localPoint, rotationDeg) => {
-  const angle = toRadians(rotationDeg);
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-
-  return {
-    x: center.x + localPoint.x * cos - localPoint.y * sin,
-    y: center.y + localPoint.x * sin + localPoint.y * cos,
-  };
-};
-
-const getLocalPoint = (point, center, rotationDeg) => {
-  const angle = toRadians(rotationDeg);
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  const dx = point.x - center.x;
-  const dy = point.y - center.y;
-
-  return {
-    x: dx * cos + dy * sin,
-    y: -dx * sin + dy * cos,
-  };
-};
-
-const getTransformedGeometry = (layer, draft = createDefaultTransformDraft()) => {
-  const bounds = getLayerDocumentBounds(layer);
-  if (!bounds) return null;
-
-  const scaleX = clamp(getDraftScaleX(draft), 1, 300) / 100;
-  const scaleY = clamp(getDraftScaleY(draft), 1, 300) / 100;
-  const width = Math.max(1, bounds.width * scaleX);
-  const height = Math.max(1, bounds.height * scaleY);
-  const center = {
-    x: bounds.x + bounds.width / 2 + draft.dx,
-    y: bounds.y + bounds.height / 2 + draft.dy,
-  };
-  const rotationDeg = getDraftRotation(draft);
-  const halfWidth = width / 2;
-  const halfHeight = height / 2;
-  const corners = {
-    nw: rotateLocalPoint(center, { x: -halfWidth, y: -halfHeight }, rotationDeg),
-    ne: rotateLocalPoint(center, { x: halfWidth, y: -halfHeight }, rotationDeg),
-    se: rotateLocalPoint(center, { x: halfWidth, y: halfHeight }, rotationDeg),
-    sw: rotateLocalPoint(center, { x: -halfWidth, y: halfHeight }, rotationDeg),
-  };
-  const handles = {
-    ...corners,
-    n: rotateLocalPoint(center, { x: 0, y: -halfHeight }, rotationDeg),
-    e: rotateLocalPoint(center, { x: halfWidth, y: 0 }, rotationDeg),
-    s: rotateLocalPoint(center, { x: 0, y: halfHeight }, rotationDeg),
-    w: rotateLocalPoint(center, { x: -halfWidth, y: 0 }, rotationDeg),
-  };
-
-  return {
-    bounds,
-    center,
-    width,
-    height,
-    rotationDeg,
-    corners,
-    handles,
-  };
-};
-
-const getBoundsFromPoints = (points) => {
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-
-  return {
-    x: Math.min(...xs),
-    y: Math.min(...ys),
-    width: Math.max(...xs) - Math.min(...xs),
-    height: Math.max(...ys) - Math.min(...ys),
-  };
-};
-
-const drawTransformedLayer = (ctx, layer, draft) => {
-  const geometry = getTransformedGeometry(layer, draft);
-  if (!geometry) return;
-
-  ctx.save();
-  ctx.translate(geometry.center.x, geometry.center.y);
-  ctx.rotate(toRadians(geometry.rotationDeg));
-  ctx.drawImage(
-    layer.canvas,
-    geometry.bounds.x - getLayerX(layer),
-    geometry.bounds.y - getLayerY(layer),
-    geometry.bounds.width,
-    geometry.bounds.height,
-    -geometry.width / 2,
-    -geometry.height / 2,
-    geometry.width,
-    geometry.height
-  );
-  ctx.restore();
-};
-
-const rasterizeTransform = (layer, draft) => {
-  const bounds = getLayerBounds(layer.canvas);
-  if (!bounds) {
-    return {
-      ...layer,
-      x: getLayerX(layer) + draft.dx,
-      y: getLayerY(layer) + draft.dy,
-    };
-  }
-
-  const geometry = getTransformedGeometry(layer, draft);
-  if (!geometry) return layer;
-
-  const transformedBounds = getBoundsFromPoints(Object.values(geometry.corners));
-  const rasterX = Math.floor(transformedBounds.x) - 1;
-  const rasterY = Math.floor(transformedBounds.y) - 1;
-  const rasterRight = Math.ceil(transformedBounds.x + transformedBounds.width) + 1;
-  const rasterBottom = Math.ceil(transformedBounds.y + transformedBounds.height) + 1;
-  const nextWidth = Math.max(1, rasterRight - rasterX);
-  const nextHeight = Math.max(1, rasterBottom - rasterY);
-  const nextCanvas = createCanvas(nextWidth, nextHeight);
-  const ctx = nextCanvas.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.translate(geometry.center.x - rasterX, geometry.center.y - rasterY);
-  ctx.rotate(toRadians(geometry.rotationDeg));
-  ctx.drawImage(
-    layer.canvas,
-    bounds.x,
-    bounds.y,
-    bounds.width,
-    bounds.height,
-    -geometry.width / 2,
-    -geometry.height / 2,
-    geometry.width,
-    geometry.height
-  );
-
-  return {
-    ...layer,
-    canvas: nextCanvas,
-    x: rasterX,
-    y: rasterY,
-  };
-};
 
 const drawLayerBounds = (ctx, layer, draft, doc) => {
   const geometry = getTransformedGeometry(layer, draft);
@@ -864,70 +461,6 @@ const getResizeTransformDraft = (interaction, point, shiftKey) => {
   };
 };
 
-const cropDocument = (doc, crop) => {
-  const safeCrop = cropFromEdges(crop.x, crop.y, crop.x + crop.width, crop.y + crop.height, doc);
-  const layers = doc.layers.map((layer) => {
-    const canvas = createCanvas(safeCrop.width, safeCrop.height);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(layer.canvas, getLayerX(layer) - safeCrop.x, getLayerY(layer) - safeCrop.y);
-
-    return {
-      ...layer,
-      canvas,
-      x: 0,
-      y: 0,
-    };
-  });
-
-  return {
-    ...doc,
-    width: safeCrop.width,
-    height: safeCrop.height,
-    layers,
-  };
-};
-
-const resizeDocument = (doc, width, height) => {
-  const nextWidth = clampDimension(width);
-  const nextHeight = clampDimension(height);
-  const scaleX = nextWidth / doc.width;
-  const scaleY = nextHeight / doc.height;
-
-  const layers = doc.layers.map((layer) => {
-    const rect = getResizedLayerRect(layer, scaleX, scaleY);
-    const canvas = createCanvas(rect.width, rect.height);
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(layer.canvas, 0, 0, canvas.width, canvas.height);
-
-    return {
-      ...layer,
-      canvas,
-      x: rect.x,
-      y: rect.y,
-    };
-  });
-
-  return {
-    ...doc,
-    width: nextWidth,
-    height: nextHeight,
-    layers,
-  };
-};
-
-const getLayerPoint = (layer, point) => ({
-  x: point.x - getLayerX(layer),
-  y: point.y - getLayerY(layer),
-});
-
-const updateLayer = (doc, layerId, updater) => ({
-  ...doc,
-  layers: doc.layers.map((layer) => (
-    layer.id === layerId ? updater(layer) : layer
-  )),
-});
-
 const getUniqueLayerIds = (layerIds) => (
   Array.from(new Set(layerIds.filter(Boolean)))
 );
@@ -958,72 +491,6 @@ const reorderLayer = (doc, draggedLayerId, targetLayerId, placement) => {
     layers,
     activeLayerId: draggedLayerId,
   };
-};
-
-const editorReducer = (state, action) => {
-  switch (action.type) {
-    case 'commit': {
-      const stateDoc = cloneDocument(action.doc);
-      const historyDoc = cloneDocument(action.doc);
-      const baseHistory = state.history.slice(0, state.historyIndex + 1);
-      let history = [...baseHistory, historyDoc];
-
-      if (history.length > HISTORY_LIMIT) {
-        history = history.slice(history.length - HISTORY_LIMIT);
-      }
-
-      return {
-        doc: stateDoc,
-        history,
-        historyIndex: history.length - 1,
-      };
-    }
-
-    case 'setDoc':
-      return {
-        ...state,
-        doc: action.doc,
-      };
-
-    case 'selectLayer':
-      return {
-        ...state,
-        doc: {
-          ...state.doc,
-          activeLayerId: action.layerId,
-        },
-      };
-
-    case 'undo': {
-      if (state.historyIndex <= 0) return state;
-      const historyIndex = state.historyIndex - 1;
-      return {
-        ...state,
-        doc: cloneDocument(state.history[historyIndex]),
-        historyIndex,
-      };
-    }
-
-    case 'redo': {
-      if (state.historyIndex >= state.history.length - 1) return state;
-      const historyIndex = state.historyIndex + 1;
-      return {
-        ...state,
-        doc: cloneDocument(state.history[historyIndex]),
-        historyIndex,
-      };
-    }
-
-    case 'reset':
-      return {
-        doc: createEmptyDocument(),
-        history: [],
-        historyIndex: -1,
-      };
-
-    default:
-      return state;
-  }
 };
 
 const loadImage = (url) => (
@@ -1065,21 +532,7 @@ const LayerThumbnail = ({ layer }) => {
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.globalAlpha = clamp(layer.opacity ?? 100, 0, 100) / 100;
-
-    const scale = Math.min(canvas.width / layer.canvas.width, canvas.height / layer.canvas.height);
-    const width = layer.canvas.width * scale;
-    const height = layer.canvas.height * scale;
-    ctx.drawImage(
-      layer.canvas,
-      (canvas.width - width) / 2,
-      (canvas.height - height) / 2,
-      width,
-      height
-    );
-    ctx.restore();
+    renderLayerThumbnail(ctx, layer, canvas.width, canvas.height);
   }, [layer]);
 
   return (
@@ -1170,8 +623,7 @@ function UnifiedPhotoEditor() {
       return [
         index,
         layer.id,
-        getLayerX(layer),
-        getLayerY(layer),
+        ...layer.transform,
         layer.visible ? 1 : 0,
         layer.opacity ?? 100,
         layer.canvas.width,
@@ -1228,6 +680,12 @@ function UnifiedPhotoEditor() {
   }, [doc]);
 
   const commitDocument = useCallback((nextDoc) => {
+    // A concurrent import or layer action can commit while a pointer is still down.
+    // Finish the working stroke before its bitmap becomes shared with history.
+    if (interactionRef.current?.type === 'stroke') {
+      finishLayerStroke(interactionRef.current);
+      interactionRef.current = null;
+    }
     docRef.current = nextDoc;
     dispatch({ type: 'commit', doc: nextDoc });
   }, []);
@@ -1377,9 +835,9 @@ function UnifiedPhotoEditor() {
     dispatch({ type: 'redo' });
   }, [resetTransformDraft]);
 
-  const renderDisplay = useCallback(() => {
+  const renderDisplay = useCallback((renderDoc = doc) => {
     const canvas = displayCanvasRef.current;
-    if (!canvas || !hasDocument(doc)) return;
+    if (!canvas || !hasDocument(renderDoc)) return;
 
     if (canvas.width !== displayWidth) canvas.width = displayWidth;
     if (canvas.height !== displayHeight) canvas.height = displayHeight;
@@ -1393,7 +851,7 @@ function UnifiedPhotoEditor() {
     const transformLayerIds = isGroupMove
       ? new Set(selectedMoveLayers.map((layer) => layer.id))
       : null;
-    renderDocument(ctx, doc, {
+    renderDocument(ctx, renderDoc, {
       resizeDimensions: isResizePreview ? { width: displayWidth, height: displayHeight } : null,
       transformLayerId,
       transformLayerIds,
@@ -1561,7 +1019,7 @@ function UnifiedPhotoEditor() {
     } catch (err) {
       toast({
         title: 'Import failed',
-        description: 'Could not load that image.',
+        description: err?.message || 'Could not load that image.',
         status: 'error',
         duration: 3000,
         isClosable: true,
@@ -1756,27 +1214,29 @@ function UnifiedPhotoEditor() {
       return;
     }
 
-    const ctx = layer.canvas.getContext('2d');
-    const layerPoint = getLayerPoint(layer, point);
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = brushSize;
-    ctx.strokeStyle = brushColor;
-    ctx.globalCompositeOperation = activeTool === TOOLS.ERASER ? 'destination-out' : 'source-over';
-    ctx.beginPath();
-    ctx.moveTo(layerPoint.x, layerPoint.y);
-    ctx.lineTo(layerPoint.x + 0.01, layerPoint.y + 0.01);
-    ctx.stroke();
+    let stroke;
+    try {
+      stroke = beginLayerStroke(layer, point, {
+        size: brushSize,
+        color: brushColor,
+        erase: activeTool === TOOLS.ERASER,
+      });
+    } catch (err) {
+      toast({ title: 'Could not edit layer', description: err.message, status: 'error' });
+      return;
+    }
+
+    const nextDoc = updateLayer(currentDoc, layer.id, () => stroke.layer);
+    setDocumentTransient(nextDoc);
 
     interactionRef.current = {
+      ...stroke,
       type: 'stroke',
       pointerId: event.pointerId,
-      ctx,
       layerId: layer.id,
     };
-    renderDisplay();
-  }, [activeTool, brushColor, brushSize, getCanvasPoint, renderDisplay, toast]);
+    renderDisplay(nextDoc);
+  }, [activeTool, brushColor, brushSize, getCanvasPoint, renderDisplay, setDocumentTransient, toast]);
 
   const continueStroke = useCallback((event) => {
     const interaction = interactionRef.current;
@@ -1784,21 +1244,15 @@ function UnifiedPhotoEditor() {
 
     const point = getCanvasPoint(event);
     if (!point) return;
-    const layer = docRef.current.layers.find((candidate) => candidate.id === interaction.layerId);
-    if (!layer) return;
-    const layerPoint = getLayerPoint(layer, point);
-
-    interaction.ctx.lineTo(layerPoint.x, layerPoint.y);
-    interaction.ctx.stroke();
-    renderDisplay();
+    continueLayerStroke(interaction, point);
+    renderDisplay(docRef.current);
   }, [getCanvasPoint, renderDisplay]);
 
   const finishStroke = useCallback(() => {
     const interaction = interactionRef.current;
     if (!interaction || interaction.type !== 'stroke') return;
 
-    interaction.ctx.closePath();
-    interaction.ctx.restore();
+    finishLayerStroke(interaction);
     interactionRef.current = null;
     commitDocument(docRef.current);
   }, [commitDocument]);
@@ -1988,11 +1442,7 @@ function UnifiedPhotoEditor() {
         ...currentDoc,
         layers: currentDoc.layers.map((candidate) => (
           selectedLayerIdSetForMove.has(candidate.id)
-            ? {
-                ...candidate,
-                x: getLayerX(candidate) + dx,
-                y: getLayerY(candidate) + dy,
-              }
+            ? translateLayer(candidate, dx, dy)
             : candidate
         )),
       };
@@ -2008,7 +1458,7 @@ function UnifiedPhotoEditor() {
     if (!layer) return;
 
     const nextDoc = updateLayer(currentDoc, layer.id, (candidate) => ({
-      ...rasterizeTransform(candidate, draft),
+      ...applyLayerTransform(candidate, draft),
     }));
 
     resetTransformDraft();

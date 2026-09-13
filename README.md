@@ -3,6 +3,8 @@ Paste or import an image, edit it in one unified canvas, and copy or download th
 
 The editor supports raster layers, drawing, erasing, cropping, resizing, layer ordering, opacity, visibility, undo, redo, clipboard export, and PNG/JPEG downloads from a single workspace.
 
+Added images initially fit inside the document while retaining their original pixels. Moving, scaling, rotating, and resizing the document preserve that detail. Brush and eraser edits use the layer's full resolution; cropping removes excluded pixels without downscaling the remaining image. Exports use the document's dimensions. Images can be up to 12,000 pixels on each side.
+
 ## SSL Certificates Setup
 
 Copying images to the clipboard requires a secure page, and SSL certificates enable HTTPS locally. Browsers also trust `http://localhost`, so certificates are optional if you set `HTTPS=false` in `.env`.
@@ -47,6 +49,14 @@ Now you can host the files in any static file hosting service like Vercel, Netli
 ```npm install -g serve``` - Install **Serve** if you haven't already *(**-g** installs package globally on your machine)*
 
 ```npx serve -s build``` - Serve the files locally
+
+## Run Tests
+
+```sh
+npm test -- --watchAll=false
+```
+
+The layer regression tests cover retained resolution, transforms, brush coordinates, cropping, resizing, and undo/redo. Verify pixel rendering and clipboard behavior in a browser as well; Jest mocks Canvas 2D.
 
 ## How to use
 
