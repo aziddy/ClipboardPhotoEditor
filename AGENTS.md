@@ -37,6 +37,7 @@ For editor changes, build and manually check paste/upload, resizing, cropping, d
 
 History uses short descriptive subjects, such as `display size in KB`, without a consistent prefix convention. Keep commits focused. PRs should explain the behavior change, link related issues, list validation performed and browsers checked, and include screenshots for visible UI changes.
 
+[IMPORTANT] DO NOT VIOLATE THIS GUIDELINE.
 Do not credit AI agents as commit authors or co-authors, including `Co-authored-by` trailers.
 
 ## Local Configuration
