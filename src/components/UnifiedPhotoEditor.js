@@ -59,24 +59,23 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { useImageExportControls } from '../utils/useImageExportControls';
+import { createRasterClient } from '../utils/rasterClient';
+import { importRasterBlob } from '../utils/rasterImport';
+import { getEditorViewport } from '../utils/editorViewport';
 import { useBrowserOcr } from '../utils/useBrowserOcr';
 import {
   MAX_DIMENSION,
   applyLayerTransform,
-  beginLayerStroke,
   clamp,
   clampDimension,
   cloneLayer,
-  continueLayerStroke,
   createDefaultTransformDraft,
   createEmptyDocument,
-  createImageLayer,
-  createLayer,
   createLayerId,
-  cropDocument,
+  createRasterLayer,
+  multiplyTransforms,
   cropFromEdges,
   editorReducer,
-  finishLayerStroke,
   getActiveLayer,
   getDraftRotation,
   getDraftScaleX,
@@ -87,10 +86,7 @@ import {
   getTransformedGeometry,
   hasDocument,
   hasTransform,
-  makeCompositeCanvas,
   normalizeRotation,
-  renderDocument,
-  renderLayerThumbnail,
   resizeDocument,
   rotateLocalPoint,
   toDegrees,
@@ -493,15 +489,6 @@ const reorderLayer = (doc, draggedLayerId, targetLayerId, placement) => {
   };
 };
 
-const loadImage = (url) => (
-  new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = url;
-  })
-);
-
 const isEditableShortcutTarget = (target) => {
   if (!target) return false;
   if (target.isContentEditable) return true;
@@ -524,34 +511,48 @@ const ToolButton = ({ icon: Icon, label, isActive, onClick, isDisabled = false }
   </Tooltip>
 );
 
-const LayerThumbnail = ({ layer }) => {
+const LayerThumbnail = ({ layer, client }) => {
   const canvasRef = useRef(null);
-
+  const queueRef = useRef({ running: false, latest: null, generation: 0 });
   useEffect(() => {
+    const queue = queueRef.current;
+    const generation = ++queue.generation;
+    const bounds = getLayerDocumentBounds(layer);
     const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    renderLayerThumbnail(ctx, layer, canvas.width, canvas.height);
-  }, [layer]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={64}
-      height={44}
-      style={{
-        width: '64px',
-        height: '44px',
-        border: '1px solid #cbd5e1',
-        backgroundColor: '#f8fafc',
-        backgroundImage:
-          'linear-gradient(45deg, #e2e8f0 25%, transparent 25%), linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e2e8f0 75%), linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)',
-        backgroundSize: '12px 12px',
-        backgroundPosition: '0 0, 0 6px, 6px -6px, -6px 0px',
-      }}
-    />
-  );
+    if (!bounds || !canvas) return undefined;
+    const scale = Math.min(64 / bounds.width, 44 / bounds.height);
+    const thumbnailDoc = {
+      width: Math.ceil(bounds.width), height: Math.ceil(bounds.height),
+      layers: [{ ...translateLayer(layer, -bounds.x, -bounds.y), visible: true }],
+    };
+    queue.latest = { client, generation, options: {
+      doc: thumbnailDoc, width: 64, height: 44,
+      view: [scale, 0, 0, scale, (64 - bounds.width * scale) / 2, (44 - bounds.height * scale) / 2],
+    } };
+    const drain = async () => {
+      if (queue.running) return;
+      queue.running = true;
+      try {
+        while (queue.latest) {
+          const request = queue.latest;
+          queue.latest = null;
+          try {
+            const { bitmap } = await request.client.call('render', request.options);
+            try {
+              if (request.generation !== queue.generation) continue;
+              const ctx = canvas.getContext('2d');
+              ctx.clearRect(0, 0, 64, 44); ctx.drawImage(bitmap, 0, 0);
+            } finally { bitmap.close(); }
+          } catch (error) { /* A removed layer or reset can cancel its thumbnail. */ }
+        }
+      } finally {
+        queue.running = false;
+      }
+    };
+    drain();
+    return () => { queue.generation += 1; queue.latest = null; canvas.width = 64; };
+  }, [layer, client]);
+  return <canvas ref={canvasRef} width={64} height={44} style={{ width: '64px', height: '44px', border: '1px solid #cbd5e1', background: '#f8fafc' }} />;
 };
 
 function UnifiedPhotoEditor() {
@@ -568,14 +569,93 @@ function UnifiedPhotoEditor() {
   const viewOffsetRef = useRef(createDefaultViewOffset());
   const previousHasDocumentRef = useRef(false);
   const visualSignatureRef = useRef('');
-  const layerCanvasIdsRef = useRef(new WeakMap());
-  const nextLayerCanvasIdRef = useRef(1);
+  const rasterClientRef = useRef(null);
+  const editorEpochRef = useRef(0);
+  const busyRef = useRef(false);
+  const jobQueueRef = useRef(Promise.resolve());
+  const queuedJobsRef = useRef(0);
+  const renderQueueRef = useRef({ running: false, latest: null, generation: 0 });
+  const [isBusy, setIsBusy] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: 800, height: 600 });
 
   const [{ doc, history, historyIndex }, dispatch] = useReducer(editorReducer, {
     doc: createEmptyDocument(),
     history: [],
     historyIndex: -1,
   });
+
+  const createClient = useCallback(() => createRasterClient((event) => {
+    if (event.type === 'historyTrimmed') {
+      dispatch({ type: 'dropHistory', keys: event.keys });
+      if (!toast.isActive('storage-history')) toast({ id: 'storage-history', title: 'Older undo steps cleared', description: 'Space was freed for the current edit.', status: 'info', duration: 4000 });
+    } else if (event.type === 'memoryFallback') {
+      toast({ title: 'Temporary storage unavailable', description: 'Editing is using a limited memory cache. Fewer large images and undo steps may fit.', status: 'info', duration: 6000 });
+    } else if (event.type === 'error') {
+      toast({ title: 'Image processing stopped', description: event.message, status: 'error', duration: 6000 });
+    }
+  }), [toast]);
+  if (!rasterClientRef.current) rasterClientRef.current = createClient();
+
+  useEffect(() => {
+    rasterClientRef.current = createClient();
+    const renderQueue = renderQueueRef.current;
+    return () => {
+      editorEpochRef.current += 1;
+      interactionRef.current?.resolveDone?.();
+      interactionRef.current = null;
+      renderQueue.generation += 1;
+      renderQueue.latest = null;
+      rasterClientRef.current.dispose().catch(() => {});
+    };
+  }, [createClient]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return undefined;
+    const observer = new ResizeObserver(() => {
+      setViewportSize({ width: viewport.clientWidth, height: viewport.clientHeight });
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!history.length && !doc.layers.length) return;
+    const rasters = (document) => document.layers.map((layer) => layer.rasterId);
+    rasterClientRef.current.call('retain', {
+      documents: history.map((document) => ({ key: document.revisionId, rasters: rasters(document) })),
+      current: rasters(doc), currentKey: history[historyIndex]?.revisionId,
+    }).catch((error) => { if (error.name !== 'AbortError') console.error(error); });
+  }, [doc, history, historyIndex]);
+
+  const runPixelOperation = useCallback((label, operation) => {
+    // Keep at most one waiting import alongside the active operation. Clipboard
+    // Blobs can own substantial memory even before the worker decodes them.
+    if (queuedJobsRef.current >= 2) {
+      if (!toast.isActive('image-queue')) toast({ id: 'image-queue', title: 'Images are still loading', description: 'Wait for these images to finish before adding another.', status: 'info', duration: 3000 });
+      return Promise.resolve();
+    }
+    queuedJobsRef.current += 1;
+    const epoch = editorEpochRef.current;
+    const client = rasterClientRef.current;
+    const strokeDone = interactionRef.current?.type === 'stroke' ? interactionRef.current.done : Promise.resolve();
+    const result = jobQueueRef.current.then(async () => {
+      await strokeDone;
+      if (epoch !== editorEpochRef.current) return;
+      busyRef.current = true; setIsBusy(true);
+      try { return await operation(client, () => epoch === editorEpochRef.current); }
+      catch (error) {
+        if (epoch === editorEpochRef.current && error.name !== 'AbortError') toast({ title: label, description: error.message, status: 'error', duration: 4500 });
+      } finally {
+        if (epoch === editorEpochRef.current) {
+          queuedJobsRef.current -= 1;
+          busyRef.current = false; setIsBusy(false);
+        }
+      }
+    });
+    jobQueueRef.current = result.catch(() => {});
+    return result;
+  }, [toast]);
 
   const [activeTool, setActiveTool] = useState(TOOLS.MOVE);
   const [brushColor, setBrushColor] = useState(DEFAULT_BRUSH_COLOR);
@@ -609,31 +689,11 @@ function UnifiedPhotoEditor() {
   );
   const displayWidth = isResizePreview ? clampDimension(resizeDraft.width) : doc.width;
   const displayHeight = isResizePreview ? clampDimension(resizeDraft.height) : doc.height;
-  const documentVisualSignature = useMemo(() => {
-    if (!hasDocument(doc)) return 'empty';
-
-    const layerSignatures = doc.layers.map((layer, index) => {
-      let canvasId = layerCanvasIdsRef.current.get(layer.canvas);
-      if (!canvasId) {
-        canvasId = nextLayerCanvasIdRef.current;
-        nextLayerCanvasIdRef.current += 1;
-        layerCanvasIdsRef.current.set(layer.canvas, canvasId);
-      }
-
-      return [
-        index,
-        layer.id,
-        ...layer.transform,
-        layer.visible ? 1 : 0,
-        layer.opacity ?? 100,
-        layer.canvas.width,
-        layer.canvas.height,
-        canvasId,
-      ].join(':');
-    });
-
-    return `${doc.width}x${doc.height}|${layerSignatures.join('|')}`;
-  }, [doc]);
+  const documentVisualSignature = useMemo(() => `${doc.width}x${doc.height}|${doc.layers.map((layer) => [layer.id, layer.rasterId, ...layer.transform, layer.visible, layer.opacity].join(':')).join('|')}`, [doc]);
+  const viewport = getEditorViewport(
+    { width: displayWidth, height: displayHeight }, viewportSize.width, viewportSize.height,
+    viewZoom, viewOffset, window.devicePixelRatio || 1
+  );
 
   useEffect(() => {
     docRef.current = doc;
@@ -680,12 +740,6 @@ function UnifiedPhotoEditor() {
   }, [doc]);
 
   const commitDocument = useCallback((nextDoc) => {
-    // A concurrent import or layer action can commit while a pointer is still down.
-    // Finish the working stroke before its bitmap becomes shared with history.
-    if (interactionRef.current?.type === 'stroke') {
-      finishLayerStroke(interactionRef.current);
-      interactionRef.current = null;
-    }
     docRef.current = nextDoc;
     dispatch({ type: 'commit', doc: nextDoc });
   }, []);
@@ -717,19 +771,8 @@ function UnifiedPhotoEditor() {
       return { maxX: 0, maxY: 0 };
     }
 
-    const viewportRect = viewport.getBoundingClientRect();
-    const canvasRect = canvas.getBoundingClientRect();
-    const renderedZoomFactor = Math.max(renderedZoom / 100, 0.01);
-    const targetZoomFactor = targetZoom / 100;
-    const baseWidth = canvasRect.width / renderedZoomFactor;
-    const baseHeight = canvasRect.height / renderedZoomFactor;
-    const scaledWidth = baseWidth * targetZoomFactor;
-    const scaledHeight = baseHeight * targetZoomFactor;
+    return getEditorViewport(docRef.current, viewport.clientWidth, viewport.clientHeight, targetZoom);
 
-    return {
-      maxX: Math.max(0, (scaledWidth - viewportRect.width) / 2),
-      maxY: Math.max(0, (scaledHeight - viewportRect.height) / 2),
-    };
   }, []);
 
   const clampViewOffset = useCallback((
@@ -782,13 +825,15 @@ function UnifiedPhotoEditor() {
     updateViewZoom(viewZoomRef.current - VIEW_ZOOM_STEP);
   }, [updateViewZoom]);
 
-  const getCompositeCanvas = useCallback(() => makeCompositeCanvas(doc), [doc]);
-
-  const {
-    updateOutputSizes,
-    resetExportState,
-    ExportControls,
-  } = useImageExportControls(getCompositeCanvas, toast, 'edited');
+  const exportProvider = useMemo(() => ({
+    revision: documentVisualSignature,
+    exportBlob: async (format, quality) => {
+      if (!hasDocument(doc)) return null;
+      if (busyRef.current) throw new Error('Wait for the current image operation to finish.');
+      return rasterClientRef.current.call('exportBlob', { doc, format, quality });
+    },
+  }), [doc, documentVisualSignature]);
+  const { resetExportState, ExportControls } = useImageExportControls(exportProvider, toast, 'edited', { automaticSizeUpdates: false });
   const {
     ocrText,
     ocrWords,
@@ -824,12 +869,14 @@ function UnifiedPhotoEditor() {
   }, [cancelOcr, clearOcr, documentVisualSignature]);
 
   const undoDocument = useCallback(() => {
+    if (busyRef.current) return;
     interactionRef.current = null;
     resetTransformDraft();
     dispatch({ type: 'undo' });
   }, [resetTransformDraft]);
 
   const redoDocument = useCallback(() => {
+    if (busyRef.current) return;
     interactionRef.current = null;
     resetTransformDraft();
     dispatch({ type: 'redo' });
@@ -838,47 +885,52 @@ function UnifiedPhotoEditor() {
   const renderDisplay = useCallback((renderDoc = doc) => {
     const canvas = displayCanvasRef.current;
     if (!canvas || !hasDocument(renderDoc)) return;
-
-    if (canvas.width !== displayWidth) canvas.width = displayWidth;
-    if (canvas.height !== displayHeight) canvas.height = displayHeight;
-
-    const ctx = canvas.getContext('2d');
     const isGroupMove = activeTool === TOOLS.MOVE && hasMultiLayerSelection;
-    const transformDraftForRender = isGroupMove
-      ? getTranslationDraft(transformDraft)
-      : transformDraft;
-    const transformLayerId = activeTool === TOOLS.MOVE && !isGroupMove ? doc.activeLayerId : null;
-    const transformLayerIds = isGroupMove
-      ? new Set(selectedMoveLayers.map((layer) => layer.id))
-      : null;
-    renderDocument(ctx, renderDoc, {
-      resizeDimensions: isResizePreview ? { width: displayWidth, height: displayHeight } : null,
-      transformLayerId,
-      transformLayerIds,
-      transformDraft: transformDraftForRender,
-    });
+    const draft = isGroupMove ? getTranslationDraft(transformDraft) : transformDraft;
+    const ids = new Set(isGroupMove ? selectedMoveLayers.map((layer) => layer.id) : activeTool === TOOLS.MOVE ? [renderDoc.activeLayerId] : []);
+    const drawingDoc = { ...renderDoc, layers: renderDoc.layers.map((layer) => ids.has(layer.id) ? applyLayerTransform(layer, draft) : layer) };
+    const view = getEditorViewport({ width: displayWidth, height: displayHeight }, viewportSize.width, viewportSize.height, viewZoom, viewOffset, window.devicePixelRatio || 1);
+    const matrix = multiplyTransforms(view.matrix, [displayWidth / renderDoc.width, 0, 0, displayHeight / renderDoc.height, 0, 0]);
+    const queue = renderQueueRef.current;
+    const generation = ++queue.generation;
+    const epoch = editorEpochRef.current;
+    queue.latest = { drawingDoc, matrix, view, generation, epoch, client: rasterClientRef.current, drawOverlay: (ctx) => {
+      ctx.save(); ctx.setTransform(...matrix);
+      if (isGroupMove) drawLayerGroupBounds(ctx, selectedMoveLayers, draft, renderDoc);
+      else if (activeTool === TOOLS.MOVE && activeLayer) drawLayerBounds(ctx, activeLayer, draft, renderDoc);
+      if (activeTool === TOOLS.CROP) drawCropOverlay(ctx, renderDoc, crop);
+      ctx.restore();
+    } };
+    if (queue.running) return;
+    queue.running = true;
+    const drain = async () => {
+      try {
+        while (queue.latest) {
+          const request = queue.latest; queue.latest = null;
+          try {
+            const { bitmap } = await request.client.call('render', { doc: request.drawingDoc, width: request.view.pixelWidth, height: request.view.pixelHeight, view: request.matrix });
+            try {
+              if (request.epoch !== editorEpochRef.current || request.generation !== queue.generation) continue;
+              if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
+              if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
+              const ctx = canvas.getContext('2d');
+              ctx.resetTransform(); ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.drawImage(bitmap, 0, 0);
+              request.drawOverlay(ctx);
+            } finally { bitmap.close(); }
+          } catch (error) {
+            if (request.epoch === editorEpochRef.current && error.name !== 'AbortError' && !toast.isActive('render-error')) toast({ id: 'render-error', title: 'Could not display image', description: error.message, status: 'error', duration: 5000 });
+          }
+        }
+      } finally { queue.running = false; }
+    };
+    drain();
+  }, [activeLayer, activeTool, crop, displayHeight, displayWidth, doc, hasMultiLayerSelection, selectedMoveLayers, toast, transformDraft, viewportSize, viewOffset, viewZoom]);
 
-    if (isGroupMove) {
-      drawLayerGroupBounds(ctx, selectedMoveLayers, transformDraftForRender, doc);
-    } else if (activeTool === TOOLS.MOVE && activeLayer) {
-      drawLayerBounds(ctx, activeLayer, transformDraftForRender, doc);
-    }
-
-    if (activeTool === TOOLS.CROP) {
-      drawCropOverlay(ctx, doc, crop);
-    }
-  }, [activeLayer, activeTool, crop, displayHeight, displayWidth, doc, hasMultiLayerSelection, isResizePreview, selectedMoveLayers, transformDraft]);
-
-  useEffect(() => {
-    renderDisplay();
-  }, [renderDisplay]);
-
-  useEffect(() => {
-    updateOutputSizes();
-  }, [doc, updateOutputSizes]);
+  useEffect(() => { renderDisplay(); }, [renderDisplay]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
+      if (busyRef.current) return;
       if (isEditableShortcutTarget(event.target)) return;
       const key = event.key.toLowerCase();
 
@@ -981,55 +1033,17 @@ function UnifiedPhotoEditor() {
     }
   }, [activeTool, crop, doc]);
 
-  const importImageUrl = useCallback(async (url) => {
-    try {
-      const image = await loadImage(url);
-      if (image.naturalWidth < 1 || image.naturalHeight < 1) {
-        throw new Error('Image has invalid dimensions');
-      }
-
-      const currentDoc = docRef.current;
-      const layer = createImageLayer(image, currentDoc, currentDoc.layers.length + 1);
-      const nextDoc = hasDocument(currentDoc)
-        ? {
-            ...currentDoc,
-            layers: [...currentDoc.layers, layer],
-            activeLayerId: layer.id,
-          }
-        : {
-            width: image.naturalWidth,
-            height: image.naturalHeight,
-            layers: [layer],
-            activeLayerId: layer.id,
-          };
-
-      commitDocument(nextDoc);
-      updateSelectedLayerIds([layer.id]);
-      setCrop(null);
-      setActiveTool(TOOLS.BRUSH);
-      toast({
-        title: hasDocument(currentDoc) ? 'Layer added' : 'Image loaded',
-        description: hasDocument(currentDoc)
-          ? 'The image was added as a new raster layer.'
-          : 'The image is ready to edit.',
-        status: 'success',
-        duration: 2200,
-        isClosable: true,
-      });
-    } catch (err) {
-      toast({
-        title: 'Import failed',
-        description: err?.message || 'Could not load that image.',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
-    } finally {
-      if (url.startsWith('blob:')) {
-        URL.revokeObjectURL(url);
-      }
-    }
-  }, [commitDocument, toast, updateSelectedLayerIds]);
+  const importImageBlob = useCallback((blob) => runPixelOperation('Import failed', async (client, isCurrent) => {
+    const source = await importRasterBlob(client, blob);
+    if (!isCurrent()) return;
+    const currentDoc = docRef.current;
+    const layer = createRasterLayer(source, currentDoc, currentDoc.layers.length + 1);
+    const nextDoc = hasDocument(currentDoc)
+      ? { ...currentDoc, layers: [...currentDoc.layers, layer], activeLayerId: layer.id }
+      : { width: source.sourceWidth, height: source.sourceHeight, layers: [layer], activeLayerId: layer.id };
+    commitDocument(nextDoc); updateSelectedLayerIds([layer.id]); setCrop(null); setActiveTool(TOOLS.BRUSH);
+    toast({ title: hasDocument(currentDoc) ? 'Layer added' : 'Image loaded', status: 'success', duration: 2200 });
+  }), [commitDocument, runPixelOperation, toast, updateSelectedLayerIds]);
 
   const handleFiles = useCallback((files) => {
     const file = Array.from(files || []).find((candidate) => candidate.type.startsWith('image/'));
@@ -1044,8 +1058,8 @@ function UnifiedPhotoEditor() {
       return;
     }
 
-    importImageUrl(URL.createObjectURL(file));
-  }, [importImageUrl, toast]);
+    importImageBlob(file);
+  }, [importImageBlob, toast]);
 
   const handleFileInputChange = useCallback((event) => {
     handleFiles(event.target.files);
@@ -1062,8 +1076,8 @@ function UnifiedPhotoEditor() {
     event.preventDefault();
     const blob = imageItem.getAsFile();
     if (!blob) return;
-    importImageUrl(URL.createObjectURL(blob));
-  }, [importImageUrl]);
+    importImageBlob(blob);
+  }, [importImageBlob]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
@@ -1089,31 +1103,15 @@ function UnifiedPhotoEditor() {
     }
   }, [commitDocument, setDocumentTransient]);
 
-  const addBlankLayer = useCallback(() => {
+  const addBlankLayer = useCallback(() => runPixelOperation('Could not add layer', async (client, isCurrent) => {
     const currentDoc = docRef.current;
-    if (!hasDocument(currentDoc)) {
-      toast({
-        title: 'Import an image first',
-        description: 'A document size is needed before adding blank layers.',
-        status: 'info',
-        duration: 2600,
-        isClosable: true,
-      });
-      return;
-    }
-
-    const layer = createLayer({
-      name: `Layer ${currentDoc.layers.length + 1}`,
-      width: currentDoc.width,
-      height: currentDoc.height,
-    });
-    commitDocument({
-      ...currentDoc,
-      layers: [...currentDoc.layers, layer],
-      activeLayerId: layer.id,
-    });
+    if (!hasDocument(currentDoc)) return;
+    const source = await client.call('blank', { width: currentDoc.width, height: currentDoc.height });
+    if (!isCurrent()) return;
+    const layer = { ...createRasterLayer(source, currentDoc, currentDoc.layers.length + 1), name: `Layer ${currentDoc.layers.length + 1}` };
+    commitDocument({ ...currentDoc, layers: [...currentDoc.layers, layer], activeLayerId: layer.id });
     updateSelectedLayerIds([layer.id]);
-  }, [commitDocument, toast, updateSelectedLayerIds]);
+  }), [commitDocument, runPixelOperation, updateSelectedLayerIds]);
 
   const duplicateActiveLayer = useCallback(() => {
     const currentDoc = docRef.current;
@@ -1184,9 +1182,10 @@ function UnifiedPhotoEditor() {
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
 
+    const view = getEditorViewport(currentDoc, rect.width, rect.height, viewZoomRef.current, viewOffsetRef.current);
     const point = {
-      x: (event.clientX - rect.left) * currentDoc.width / rect.width,
-      y: (event.clientY - rect.top) * currentDoc.height / rect.height,
+      x: (event.clientX - rect.left - view.x) / view.scale,
+      y: (event.clientY - rect.top - view.y) / view.scale,
     };
 
     if (!shouldClamp) return point;
@@ -1197,65 +1196,74 @@ function UnifiedPhotoEditor() {
     };
   }, []);
 
+  const drainStroke = useCallback(async (stroke) => {
+    if (stroke.processing) return;
+    stroke.processing = true;
+    try {
+      let source = await stroke.started;
+      if (stroke.epoch !== editorEpochRef.current) return;
+      while (true) {
+        if (stroke.points.length) source = await stroke.client.call('strokePoints', { points: stroke.points.splice(0, 128) });
+        if (stroke.epoch !== editorEpochRef.current) return;
+        const currentSource = source;
+        const nextDoc = updateLayer(stroke.baseDoc, stroke.layerId, (layer) => ({ ...layer, ...currentSource }));
+        setDocumentTransient(nextDoc);
+        if (stroke.points.length) continue;
+        if (stroke.ended) {
+          await stroke.client.call('finishStroke');
+          if (stroke.epoch !== editorEpochRef.current) return;
+          interactionRef.current = null;
+          commitDocument(nextDoc);
+          busyRef.current = false; setIsBusy(false); stroke.resolveDone();
+        }
+        break;
+      }
+    } catch (error) {
+      await stroke.client.call('abortStroke').catch(() => {});
+      if (stroke.epoch === editorEpochRef.current) {
+        interactionRef.current = null;
+        setDocumentTransient(stroke.baseDoc);
+        busyRef.current = false; setIsBusy(false);
+        if (error.name !== 'AbortError') toast({ title: 'Could not finish stroke', description: error.message, status: 'error' });
+      }
+      stroke.resolveDone();
+    } finally { stroke.processing = false; }
+  }, [commitDocument, setDocumentTransient, toast]);
+
   const startStroke = useCallback((event) => {
+    if (busyRef.current) return;
     const currentDoc = docRef.current;
     const layer = getActiveLayer(currentDoc);
-    const point = getCanvasPoint(event);
-    if (!layer || !point) return;
-
-    if (!layer.visible) {
-      toast({
-        title: 'Layer hidden',
-        description: 'Make the active layer visible before drawing on it.',
-        status: 'info',
-        duration: 2200,
-        isClosable: true,
-      });
-      return;
-    }
-
-    let stroke;
-    try {
-      stroke = beginLayerStroke(layer, point, {
-        size: brushSize,
-        color: brushColor,
-        erase: activeTool === TOOLS.ERASER,
-      });
-    } catch (err) {
-      toast({ title: 'Could not edit layer', description: err.message, status: 'error' });
-      return;
-    }
-
-    const nextDoc = updateLayer(currentDoc, layer.id, () => stroke.layer);
-    setDocumentTransient(nextDoc);
-
-    interactionRef.current = {
-      ...stroke,
-      type: 'stroke',
-      pointerId: event.pointerId,
-      layerId: layer.id,
+    const point = getCanvasPoint(event, false);
+    if (!layer || !point || point.x < 0 || point.y < 0 || point.x > currentDoc.width || point.y > currentDoc.height) return;
+    if (!layer.visible) { toast({ title: 'Layer hidden', description: 'Make the active layer visible before drawing on it.', status: 'info' }); return; }
+    const client = rasterClientRef.current;
+    let resolveDone;
+    const done = new Promise((resolve) => { resolveDone = resolve; });
+    const stroke = {
+      type: 'stroke', layerId: layer.id, pointerId: event.pointerId, baseDoc: currentDoc,
+      epoch: editorEpochRef.current, client, points: [], ended: false, processing: false, done, resolveDone,
+      started: client.call('beginStroke', { layer, point, size: brushSize, color: brushColor, erase: activeTool === TOOLS.ERASER }),
     };
-    renderDisplay(nextDoc);
-  }, [activeTool, brushColor, brushSize, getCanvasPoint, renderDisplay, setDocumentTransient, toast]);
+    interactionRef.current = stroke;
+    busyRef.current = true; setIsBusy(true);
+    drainStroke(stroke);
+  }, [activeTool, brushColor, brushSize, drainStroke, getCanvasPoint, toast]);
 
   const continueStroke = useCallback((event) => {
-    const interaction = interactionRef.current;
-    if (!interaction || interaction.type !== 'stroke') return;
-
-    const point = getCanvasPoint(event);
-    if (!point) return;
-    continueLayerStroke(interaction, point);
-    renderDisplay(docRef.current);
-  }, [getCanvasPoint, renderDisplay]);
+    const stroke = interactionRef.current;
+    if (!stroke || stroke.type !== 'stroke' || stroke.ended || stroke.pointerId !== event.pointerId) return;
+    const coalesced = event.nativeEvent?.getCoalescedEvents?.();
+    const events = coalesced?.length ? coalesced : [event];
+    events.forEach((sample) => { const point = getCanvasPoint(sample); if (point) stroke.points.push(point); });
+    drainStroke(stroke);
+  }, [drainStroke, getCanvasPoint]);
 
   const finishStroke = useCallback(() => {
-    const interaction = interactionRef.current;
-    if (!interaction || interaction.type !== 'stroke') return;
-
-    finishLayerStroke(interaction);
-    interactionRef.current = null;
-    commitDocument(docRef.current);
-  }, [commitDocument]);
+    const stroke = interactionRef.current;
+    if (!stroke || stroke.type !== 'stroke') return;
+    stroke.ended = true; drainStroke(stroke);
+  }, [drainStroke]);
 
   const startCropInteraction = useCallback((event) => {
     const currentDoc = docRef.current;
@@ -1266,7 +1274,7 @@ function UnifiedPhotoEditor() {
     const rect = canvas.getBoundingClientRect();
     const tolerance = Math.max(
       6,
-      Math.min(currentDoc.width / rect.width, currentDoc.height / rect.height) * 10
+      10 / getEditorViewport(currentDoc, rect.width, rect.height, viewZoomRef.current).scale
     );
     const currentCrop = cropRef.current || createDefaultCrop(currentDoc);
     const mode = getCropHitMode(currentCrop, point, tolerance);
@@ -1333,7 +1341,7 @@ function UnifiedPhotoEditor() {
     const rect = canvas.getBoundingClientRect();
     const tolerance = Math.max(
       6,
-      Math.min(currentDoc.width / rect.width, currentDoc.height / rect.height) * 10
+      10 / getEditorViewport(currentDoc, rect.width, rect.height, viewZoomRef.current).scale
     );
     const selectedLayerIdSetForMove = new Set(selectedLayerIdsRef.current);
     const selectedLayersForMove = currentDoc.layers.filter((candidate) => (
@@ -1528,7 +1536,7 @@ function UnifiedPhotoEditor() {
 
   const handlePointerMove = useCallback((event) => {
     const interaction = interactionRef.current;
-    if (!interaction) return;
+    if (!interaction || interaction.pointerId !== event.pointerId) return;
 
     event.preventDefault();
 
@@ -1554,7 +1562,7 @@ function UnifiedPhotoEditor() {
 
   const handlePointerUp = useCallback((event) => {
     const interaction = interactionRef.current;
-    if (!interaction) return;
+    if (!interaction || interaction.pointerId !== event.pointerId) return;
 
     event.preventDefault();
 
@@ -1578,16 +1586,15 @@ function UnifiedPhotoEditor() {
     }
   }, [finishCropInteraction, finishMoveInteraction, finishPanInteraction, finishStroke]);
 
-  const applyCrop = useCallback(() => {
+  const applyCrop = useCallback(() => runPixelOperation('Could not crop image', async (client, isCurrent) => {
     const currentDoc = docRef.current;
     const currentCrop = cropRef.current;
     if (!hasDocument(currentDoc) || !currentCrop) return;
-
-    const nextDoc = cropDocument(currentDoc, currentCrop);
-    setCrop(null);
-    setActiveTool(TOOLS.MOVE);
-    commitDocument(nextDoc);
-  }, [commitDocument]);
+    const safeCrop = cropFromEdges(currentCrop.x, currentCrop.y, currentCrop.x + currentCrop.width, currentCrop.y + currentCrop.height, currentDoc);
+    const nextDoc = await client.call('crop', { doc: currentDoc, crop: safeCrop });
+    if (!isCurrent()) return;
+    setCrop(null); setActiveTool(TOOLS.MOVE); commitDocument(nextDoc);
+  }), [commitDocument, runPixelOperation]);
 
   const applyResize = useCallback(() => {
     const currentDoc = docRef.current;
@@ -1599,8 +1606,7 @@ function UnifiedPhotoEditor() {
   }, [commitDocument, resizeDraft.height, resizeDraft.width]);
 
   const handleRunOcr = useCallback(async () => {
-    const canvas = getCompositeCanvas();
-    if (!canvas) {
+    if (!hasDocument(docRef.current) || busyRef.current) {
       toast({
         title: 'No image available',
         description: 'Import an image before running OCR.',
@@ -1612,7 +1618,11 @@ function UnifiedPhotoEditor() {
     }
 
     try {
-      const text = await runOcr(canvas);
+      const epoch = editorEpochRef.current;
+      const sourceDoc = docRef.current;
+      const input = await rasterClientRef.current.call('ocrInput', { doc: sourceDoc });
+      if (epoch !== editorEpochRef.current || sourceDoc !== docRef.current) return;
+      const text = await runOcr(input);
       toast({
         title: text ? 'OCR complete' : 'No text found',
         description: text
@@ -1633,7 +1643,7 @@ function UnifiedPhotoEditor() {
         isClosable: true,
       });
     }
-  }, [getCompositeCanvas, runOcr, toast]);
+  }, [runOcr, toast]);
 
   const handleCopyOcrText = useCallback(async () => {
     const text = ocrText.trim();
@@ -1698,6 +1708,22 @@ function UnifiedPhotoEditor() {
   }, [handleCopySelectedOcrText, selectedOcrText]);
 
   const resetEditor = useCallback(() => {
+    editorEpochRef.current += 1;
+    if (displayCanvasRef.current) {
+      displayCanvasRef.current.width = 1;
+      displayCanvasRef.current.height = 1;
+    }
+    interactionRef.current?.resolveDone?.();
+    interactionRef.current = null;
+    renderQueueRef.current.generation += 1;
+    renderQueueRef.current.latest = null;
+    const previous = rasterClientRef.current;
+    rasterClientRef.current = createClient();
+    previous.dispose().catch(() => {});
+    jobQueueRef.current = Promise.resolve();
+    queuedJobsRef.current = 0;
+    busyRef.current = false; setIsBusy(false);
+    cancelOcr();
     dispatch({ type: 'reset' });
     docRef.current = createEmptyDocument();
     updateSelectedLayerIds([]);
@@ -1707,7 +1733,7 @@ function UnifiedPhotoEditor() {
     resetView();
     resetExportState();
     clearOcr();
-  }, [clearOcr, resetExportState, resetTransformDraft, resetView, updateSelectedLayerIds]);
+  }, [cancelOcr, clearOcr, createClient, resetExportState, resetTransformDraft, resetView, updateSelectedLayerIds]);
 
   const updateResizeWidth = useCallback((value) => {
     const width = clampDimension(value);
@@ -1957,6 +1983,16 @@ function UnifiedPhotoEditor() {
       color="gray.900"
       onDrop={handleDrop}
       onDragOver={(event) => event.preventDefault()}
+      aria-busy={isBusy}
+      onKeyDownCapture={(event) => {
+        if (busyRef.current && !event.target.closest('[data-editor-reset]')) { event.preventDefault(); event.stopPropagation(); }
+      }}
+      onPointerDownCapture={(event) => {
+        if (busyRef.current && !event.target.closest('canvas, [data-editor-reset]')) { event.preventDefault(); event.stopPropagation(); }
+      }}
+      onClickCapture={(event) => {
+        if (busyRef.current && !event.target.closest('[data-editor-reset]')) { event.preventDefault(); event.stopPropagation(); }
+      }}
     >
       <VStack spacing={4} align="stretch" w="100%" p={{ base: 3, md: 5 }}>
         <Flex gap={3} align="center" wrap="wrap">
@@ -1969,6 +2005,7 @@ function UnifiedPhotoEditor() {
                 {hasDocument(doc) ? `${doc.width} x ${doc.height}px` : 'No document'}
               </Badge>
               <Text>{doc.layers.length} layer{doc.layers.length === 1 ? '' : 's'}</Text>
+              {isBusy && <Text color="blue.600" role="status">Processing image…</Text>}
             </HStack>
           </Box>
 
@@ -2049,8 +2086,9 @@ function UnifiedPhotoEditor() {
               <IconButton
                 aria-label="Reset"
                 icon={<RotateCcw size={18} />}
+                data-editor-reset="true"
                 onClick={resetEditor}
-                isDisabled={!hasDocument(doc)}
+                isDisabled={!hasDocument(doc) && !isBusy}
                 colorScheme="red"
                 variant="outline"
                 size="sm"
@@ -2115,6 +2153,7 @@ function UnifiedPhotoEditor() {
           <Flex
             ref={viewportRef}
             position="relative"
+            h={{ base: '58vh', lg: 'calc(100vh - 150px)' }}
             minH={{ base: '58vh', lg: 'calc(100vh - 150px)' }}
             bg="gray.900"
             border="1px solid"
@@ -2125,6 +2164,7 @@ function UnifiedPhotoEditor() {
             overflow="hidden"
             p={{ base: 3, md: 5 }}
           >
+            {isBusy && <Badge position="absolute" top={3} right={3} zIndex={2} colorScheme="blue" pointerEvents="none">Processing image…</Badge>}
             {isResizePreview && (
               <Badge
                 position="absolute"
@@ -2161,38 +2201,21 @@ function UnifiedPhotoEditor() {
                 </Button>
               </VStack>
             ) : (
-              <Box
-                position="relative"
-                display="inline-block"
-                w="100%"
-                maxW={`calc((100vh - 210px) * ${displayWidth / displayHeight})`}
-                maxH="calc(100vh - 210px)"
-                lineHeight={0}
-                transform={`translate(${viewOffset.x}px, ${viewOffset.y}px) scale(${viewZoom / 100})`}
-                transformOrigin="center center"
-                transition={isViewDragging ? undefined : 'transform 120ms ease-out'}
-                willChange="transform"
-              >
+              <Box position="absolute" inset={0} lineHeight={0}>
+                <Box
+                  position="absolute" pointerEvents="none"
+                  left={`${viewport.x}px`} top={`${viewport.y}px`} w={`${viewport.width}px`} h={`${viewport.height}px`}
+                  bg="#f8fafc"
+                  backgroundImage="linear-gradient(45deg, #e2e8f0 25%, transparent 25%), linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e2e8f0 75%), linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)"
+                  backgroundSize="18px 18px" backgroundPosition="0 0, 0 9px, 9px -9px, -9px 0px"
+                />
                 <canvas
                   ref={displayCanvasRef}
                   onPointerDown={handlePointerDown}
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
                   onPointerCancel={handlePointerUp}
-                  style={{
-                    maxWidth: '100%',
-                    maxHeight: 'calc(100vh - 210px)',
-                    width: '100%',
-                    height: 'auto',
-                    display: 'block',
-                    cursor: toolCursor,
-                    touchAction: 'none',
-                    backgroundColor: '#f8fafc',
-                    backgroundImage:
-                      'linear-gradient(45deg, #e2e8f0 25%, transparent 25%), linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e2e8f0 75%), linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)',
-                    backgroundSize: '18px 18px',
-                    backgroundPosition: '0 0, 0 9px, 9px -9px, -9px 0px',
-                  }}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', cursor: toolCursor, touchAction: 'none' }}
                 />
 
                 {ocrWords.length > 0 && (
@@ -2202,9 +2225,8 @@ function UnifiedPhotoEditor() {
                     viewBox={`0 0 ${doc.width} ${doc.height}`}
                     preserveAspectRatio="none"
                     position="absolute"
-                    inset={0}
-                    w="100%"
-                    h="100%"
+                    left={`${viewport.x}px`} top={`${viewport.y}px`}
+                    w={`${viewport.width}px`} h={`${viewport.height}px`}
                     pointerEvents={isViewPanning ? 'none' : 'auto'}
                     cursor="text"
                     touchAction="none"
@@ -2573,7 +2595,7 @@ function UnifiedPhotoEditor() {
                               <GripVertical size={16} />
                             </Box>
                           </Tooltip>
-                          <LayerThumbnail layer={layer} />
+                          <LayerThumbnail layer={layer} client={rasterClientRef.current} />
                           <Box flex={1} minW={0}>
                             <Input
                               value={layer.name}

@@ -2,6 +2,33 @@
  * Utility functions for exporting images in different formats
  */
 
+export const copyImageBlob = async (blobPromise, toast) => {
+  // Attach a rejection handler even if the Clipboard API is unavailable.
+  const image = Promise.resolve(blobPromise);
+  image.catch(() => {});
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })]);
+    toast({ title: 'Success', description: 'Image copied to clipboard as PNG', status: 'success', duration: 3000 });
+    return true;
+  } catch (error) {
+    if (error.name !== 'AbortError') toast({ title: 'Copy failed', description: error.message || 'Could not copy the image.', status: 'error', duration: 3000 });
+    return false;
+  }
+};
+
+export const downloadImageBlob = (blob, format, filename, toast) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${filename}.${format === 'image/png' ? 'png' : 'jpg'}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast({ title: 'Success', description: 'Image downloaded successfully', status: 'success', duration: 3000 });
+  return true;
+};
+
 /**
  * Calculate the size of a canvas when exported to a specific format
  * @param {HTMLCanvasElement} canvas - The canvas element
@@ -249,4 +276,4 @@ export const createResizedCanvas = (image, dimensions, scale) => {
     console.error('Error creating resized canvas:', err);
     return null;
   }
-}; 
+};

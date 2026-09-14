@@ -141,6 +141,7 @@ export const useBrowserOcr = () => {
   const isRunningRef = useRef(false);
   const cancelRequestedRef = useRef(false);
   const isMountedRef = useRef(true);
+  const runGenerationRef = useRef(0);
 
   const safeSetOcrState = useCallback((updater) => {
     if (!isMountedRef.current) return;
@@ -173,7 +174,7 @@ export const useBrowserOcr = () => {
     if (workerRef.current) return workerRef.current;
 
     if (!workerPromiseRef.current) {
-      workerPromiseRef.current = import('tesseract.js')
+      const pendingWorker = import('tesseract.js')
         .then(async ({ createWorker }) => {
           const worker = await createWorker('eng', 1, {
             workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@${TESSERACT_VERSION}/dist/worker.min.js`,
@@ -204,13 +205,18 @@ export const useBrowserOcr = () => {
             preserve_interword_spaces: '1',
           });
 
+          if (workerPromiseRef.current !== pendingWorker) {
+            await worker.terminate();
+            throw Object.assign(new Error(OCR_CANCELED_MESSAGE), { name: 'AbortError' });
+          }
           workerRef.current = worker;
           return worker;
         })
         .catch((err) => {
-          workerPromiseRef.current = null;
+          if (workerPromiseRef.current === pendingWorker) workerPromiseRef.current = null;
           throw err;
         });
+      workerPromiseRef.current = pendingWorker;
     }
 
     return workerPromiseRef.current;
@@ -221,11 +227,12 @@ export const useBrowserOcr = () => {
       throw new Error('OCR is already running.');
     }
 
-    const preparedOcrCanvas = prepareCanvasForOcr(sourceCanvas);
+    const preparedOcrCanvas = sourceCanvas?.blob ? sourceCanvas : prepareCanvasForOcr(sourceCanvas);
     if (!preparedOcrCanvas) {
       throw new Error('No image is available for OCR.');
     }
 
+    const generation = ++runGenerationRef.current;
     isRunningRef.current = true;
     cancelRequestedRef.current = false;
     safeSetOcrState((current) => ({
@@ -239,6 +246,7 @@ export const useBrowserOcr = () => {
 
     try {
       const worker = await getWorker();
+      if (generation !== runGenerationRef.current) throw Object.assign(new Error(OCR_CANCELED_MESSAGE), { name: 'AbortError' });
 
       safeSetOcrState((current) => ({
         ...current,
@@ -248,13 +256,14 @@ export const useBrowserOcr = () => {
       }));
 
       const result = await worker.recognize(
-        preparedOcrCanvas.canvas,
+        preparedOcrCanvas.blob || preparedOcrCanvas.canvas,
         {},
         {
           text: true,
           blocks: true,
         }
       );
+      if (generation !== runGenerationRef.current) throw Object.assign(new Error(OCR_CANCELED_MESSAGE), { name: 'AbortError' });
       const text = result?.data?.text?.trim() || '';
       const words = normalizeOcrWords(result?.data?.blocks, preparedOcrCanvas.scale);
       const confidence = Number.isFinite(result?.data?.confidence)
@@ -275,6 +284,7 @@ export const useBrowserOcr = () => {
 
       return text;
     } catch (err) {
+      if (generation !== runGenerationRef.current) throw Object.assign(new Error(OCR_CANCELED_MESSAGE), { name: 'AbortError' });
       if (cancelRequestedRef.current) {
         const abortError = new Error(OCR_CANCELED_MESSAGE);
         abortError.name = 'AbortError';
@@ -299,10 +309,17 @@ export const useBrowserOcr = () => {
       }));
       throw err;
     } finally {
-      isRunningRef.current = false;
-      cancelRequestedRef.current = false;
+      if (preparedOcrCanvas.canvas) {
+        preparedOcrCanvas.canvas.width = 1;
+        preparedOcrCanvas.canvas.height = 1;
+      }
+      if (generation === runGenerationRef.current) {
+        await terminateWorker();
+        isRunningRef.current = false;
+        cancelRequestedRef.current = false;
+      }
     }
-  }, [getWorker, safeSetOcrState]);
+  }, [getWorker, safeSetOcrState, terminateWorker]);
 
   const clearOcr = useCallback(() => {
     safeSetOcrState(createInitialOcrState);
@@ -331,6 +348,7 @@ export const useBrowserOcr = () => {
   }, [safeSetOcrState]);
 
   const cancelOcr = useCallback(async () => {
+    runGenerationRef.current += 1;
     if (!isRunningRef.current && !workerPromiseRef.current) return;
 
     cancelRequestedRef.current = true;
@@ -351,6 +369,7 @@ export const useBrowserOcr = () => {
 
     return () => {
       isMountedRef.current = false;
+      runGenerationRef.current += 1;
       isRunningRef.current = false;
       cancelRequestedRef.current = true;
       terminateWorker();

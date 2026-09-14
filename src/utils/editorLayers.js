@@ -108,6 +108,22 @@ export const createImageLayer = (image, doc, layerNumber) => {
   };
 };
 
+// The editor's raster sources live in the worker; documents contain metadata only.
+export const createRasterLayer = (source, doc, layerNumber) => {
+  const { sourceWidth: width, sourceHeight: height } = source;
+  const isNewDocument = !hasDocument(doc);
+  const scale = isNewDocument ? 1 : Math.min(1, doc.width / width, doc.height / height);
+  const fittedWidth = Math.max(1, Math.round(width * scale));
+  const fittedHeight = Math.max(1, Math.round(height * scale));
+  return {
+    ...source, id: createLayerId(), name: isNewDocument ? 'Background' : `Image ${layerNumber}`,
+    visible: true, opacity: 100,
+    transform: [fittedWidth / width, 0, 0, fittedHeight / height,
+      isNewDocument ? 0 : Math.round((doc.width - fittedWidth) / 2),
+      isNewDocument ? 0 : Math.round((doc.height - fittedHeight) / 2)],
+  };
+};
+
 // left * right applies right first, then left, without decomposing rotations/scales.
 export const multiplyTransforms = (left, right) => {
   const [a, b, c, d, e, f] = left;
@@ -190,7 +206,7 @@ const getBoundsFromPoints = (points) => {
 };
 
 export const getLayerDocumentBounds = (layer) => {
-  const bounds = getLayerBounds(layer.canvas);
+  const bounds = layer.rasterId ? layer.sourceBounds : getLayerBounds(layer.canvas);
   if (!bounds) return null;
   const { x, y, width, height } = bounds;
   return getBoundsFromPoints([
@@ -429,16 +445,22 @@ export const finishLayerStroke = (stroke) => {
 export const editorReducer = (state, action) => {
   switch (action.type) {
     case 'commit': {
-      const historyDoc = cloneDocument(action.doc);
+      const historyDoc = { ...cloneDocument(action.doc), revisionId: createLayerId() };
       const history = [...state.history.slice(0, state.historyIndex + 1), historyDoc].slice(-HISTORY_LIMIT);
       return {
-        doc: cloneDocument(action.doc),
+        doc: cloneDocument(historyDoc),
         history,
         historyIndex: history.length - 1,
       };
     }
     case 'setDoc':
       return { ...state, doc: action.doc };
+    case 'dropHistory': {
+      const keys = new Set(action.keys);
+      const currentKey = state.history[state.historyIndex]?.revisionId;
+      const history = state.history.filter((doc) => !keys.has(doc.revisionId) || doc.revisionId === currentKey);
+      return { ...state, history, historyIndex: history.findIndex((doc) => doc.revisionId === currentKey) };
+    }
     case 'selectLayer':
       return { ...state, doc: { ...state.doc, activeLayerId: action.layerId } };
     case 'undo': {

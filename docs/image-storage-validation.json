@@ -1,0 +1,409 @@
+{
+  "checks": {
+    "unitTests": {
+      "passed": 34,
+      "suites": 4
+    },
+    "productionBuild": "passed",
+    "eslint": "passed",
+    "clipboard": {
+      "chrome": "PNG copied successfully through a native user click",
+      "safari": "PNG copied successfully through a native user click"
+    },
+    "ocr": {
+      "fixture": [
+        "Original image details",
+        "Clipboard photo editor"
+      ],
+      "chrome": {
+        "recognizedBothLines": true,
+        "confidence": 94
+      },
+      "safari": {
+        "recognizedBothLines": true,
+        "confidence": 95
+      }
+    }
+  },
+  "browserSuites": {
+    "safari-ui": {
+      "kind": "ui",
+      "complete": true,
+      "passed": 14,
+      "total": 14,
+      "results": [
+        {
+          "name": "Upload starts the document at 600\u00d7480",
+          "passed": true
+        },
+        {
+          "name": "Paste adds a fitted full-resolution image layer",
+          "passed": true
+        },
+        {
+          "name": "Move slider retains original detail in PNG output",
+          "passed": true,
+          "detail": {
+            "meanPixelDifference": 0
+          }
+        },
+        {
+          "name": "Brush edits render immediately and survive undo/redo",
+          "passed": true
+        },
+        {
+          "name": "Duplicate and eraser edits do not change the original layer",
+          "passed": true
+        },
+        {
+          "name": "Layer opacity and visibility remain functional",
+          "passed": true
+        },
+        {
+          "name": "Document resize down and back preserves the composed pixels",
+          "passed": true
+        },
+        {
+          "name": "Crop changes dimensions and undo restores the complete image",
+          "passed": true
+        },
+        {
+          "name": "Explicit output sizes do not run automatically",
+          "passed": true
+        },
+        {
+          "name": "PNG/JPEG downloads and JPEG quality use the composed document",
+          "passed": true,
+          "detail": [
+            {
+              "name": "edited-image.png",
+              "bytes": 16745
+            },
+            {
+              "name": "edited-image.jpg",
+              "bytes": 127534
+            },
+            {
+              "name": "edited-image.jpg",
+              "bytes": 57923
+            }
+          ]
+        },
+        {
+          "name": "Reset clears the document and history",
+          "passed": true
+        },
+        {
+          "name": "Drop imports an image and touch strokes edit the active layer",
+          "passed": true
+        },
+        {
+          "name": "Reset cancels an in-flight import and accepts a new image",
+          "passed": true
+        },
+        {
+          "name": "Reset cancels an in-flight brush stroke",
+          "passed": true
+        }
+      ],
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
+    },
+    "chrome-engine": {
+      "kind": "engine",
+      "complete": true,
+      "passed": 12,
+      "total": 12,
+      "results": [
+        {
+          "name": "OPFS worker initializes",
+          "passed": true,
+          "detail": {
+            "backend": "opfs",
+            "storageBytes": 0,
+            "storageLimit": 2147483648,
+            "cacheBytes": 0,
+            "peakCacheBytes": 0,
+            "scratchReserve": 16777216,
+            "rasterVersions": 0,
+            "tileFiles": 0
+          }
+        },
+        {
+          "name": "Import and native-resolution output preserve every pixel",
+          "passed": true,
+          "detail": {
+            "diff": {
+              "max": 0,
+              "mean": 0
+            },
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 4193280,
+              "storageLimit": 2147483648,
+              "cacheBytes": 4193280,
+              "peakCacheBytes": 4193280,
+              "scratchReserve": 16777216,
+              "rasterVersions": 1,
+              "tileFiles": 9
+            }
+          }
+        },
+        {
+          "name": "Repeated shrinking/enlarging retains source detail",
+          "passed": true
+        },
+        {
+          "name": "Brush crosses tile edges and previous version stays unchanged",
+          "passed": true,
+          "detail": {
+            "backend": "opfs",
+            "storageBytes": 7276544,
+            "storageLimit": 2147483648,
+            "cacheBytes": 7276544,
+            "peakCacheBytes": 9311232,
+            "scratchReserve": 16777216,
+            "rasterVersions": 2,
+            "tileFiles": 13
+          }
+        },
+        {
+          "name": "Eraser, cancel, and crop retain independent pixels",
+          "passed": true
+        },
+        {
+          "name": "Rotated transparent tile boundaries have no seams",
+          "passed": true,
+          "detail": {
+            "max": 255,
+            "mean": 0.043047626201923074
+          }
+        },
+        {
+          "name": "SVG import keeps its native dimensions",
+          "passed": true
+        },
+        {
+          "name": "Another session cannot delete an active session",
+          "passed": true
+        },
+        {
+          "name": "A later session removes abandoned OPFS files",
+          "passed": true
+        },
+        {
+          "name": "indexeddb fallback preserves pixels and disposes its data",
+          "passed": true
+        },
+        {
+          "name": "memory fallback preserves pixels and disposes its data",
+          "passed": true
+        },
+        {
+          "name": "Reset removes owned image storage and cache references",
+          "passed": true,
+          "detail": {
+            "backend": "opfs",
+            "storageBytes": 0,
+            "storageLimit": 2147483648,
+            "cacheBytes": 0,
+            "peakCacheBytes": 14491648,
+            "scratchReserve": 16777216,
+            "rasterVersions": 0,
+            "tileFiles": 0
+          }
+        }
+      ],
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+    },
+    "chrome-ui": {
+      "kind": "ui",
+      "complete": true,
+      "passed": 14,
+      "total": 14,
+      "results": [
+        {
+          "name": "Upload starts the document at 600\u00d7480",
+          "passed": true
+        },
+        {
+          "name": "Paste adds a fitted full-resolution image layer",
+          "passed": true
+        },
+        {
+          "name": "Move slider retains original detail in PNG output",
+          "passed": true,
+          "detail": {
+            "meanPixelDifference": 0
+          }
+        },
+        {
+          "name": "Brush edits render immediately and survive undo/redo",
+          "passed": true
+        },
+        {
+          "name": "Duplicate and eraser edits do not change the original layer",
+          "passed": true
+        },
+        {
+          "name": "Layer opacity and visibility remain functional",
+          "passed": true
+        },
+        {
+          "name": "Document resize down and back preserves the composed pixels",
+          "passed": true
+        },
+        {
+          "name": "Crop changes dimensions and undo restores the complete image",
+          "passed": true
+        },
+        {
+          "name": "Explicit output sizes do not run automatically",
+          "passed": true
+        },
+        {
+          "name": "PNG/JPEG downloads and JPEG quality use the composed document",
+          "passed": true,
+          "detail": [
+            {
+              "name": "edited-image.png",
+              "bytes": 34296
+            },
+            {
+              "name": "edited-image.jpg",
+              "bytes": 58203
+            },
+            {
+              "name": "edited-image.jpg",
+              "bytes": 27539
+            }
+          ]
+        },
+        {
+          "name": "Reset clears the document and history",
+          "passed": true
+        },
+        {
+          "name": "Drop imports an image and touch strokes edit the active layer",
+          "passed": true
+        },
+        {
+          "name": "Reset cancels an in-flight import and accepts a new image",
+          "passed": true
+        },
+        {
+          "name": "Reset cancels an in-flight brush stroke",
+          "passed": true
+        }
+      ],
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+    },
+    "safari-engine": {
+      "kind": "engine",
+      "complete": true,
+      "passed": 12,
+      "total": 12,
+      "results": [
+        {
+          "name": "OPFS worker initializes",
+          "passed": true,
+          "detail": {
+            "backend": "opfs",
+            "storageBytes": 0,
+            "storageLimit": 2147483648,
+            "cacheBytes": 0,
+            "peakCacheBytes": 0,
+            "scratchReserve": 16777216,
+            "rasterVersions": 0,
+            "tileFiles": 0
+          }
+        },
+        {
+          "name": "Import and native-resolution output preserve every pixel",
+          "passed": true,
+          "detail": {
+            "diff": {
+              "max": 0,
+              "mean": 0
+            },
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 4193280,
+              "storageLimit": 2147483648,
+              "cacheBytes": 4193280,
+              "peakCacheBytes": 4193280,
+              "scratchReserve": 16777216,
+              "rasterVersions": 1,
+              "tileFiles": 9
+            }
+          }
+        },
+        {
+          "name": "Repeated shrinking/enlarging retains source detail",
+          "passed": true
+        },
+        {
+          "name": "Brush crosses tile edges and previous version stays unchanged",
+          "passed": true,
+          "detail": {
+            "backend": "opfs",
+            "storageBytes": 7276544,
+            "storageLimit": 2147483648,
+            "cacheBytes": 7276544,
+            "peakCacheBytes": 9311232,
+            "scratchReserve": 16777216,
+            "rasterVersions": 2,
+            "tileFiles": 13
+          }
+        },
+        {
+          "name": "Eraser, cancel, and crop retain independent pixels",
+          "passed": true
+        },
+        {
+          "name": "Rotated transparent tile boundaries have no seams",
+          "passed": true,
+          "detail": {
+            "max": 255,
+            "mean": 0.046858723958333334,
+            "outerEdgeDifferences": 1
+          }
+        },
+        {
+          "name": "SVG import keeps its native dimensions",
+          "passed": true
+        },
+        {
+          "name": "Another session cannot delete an active session",
+          "passed": true
+        },
+        {
+          "name": "A later session removes abandoned OPFS files",
+          "passed": true
+        },
+        {
+          "name": "indexeddb fallback preserves pixels and disposes its data",
+          "passed": true
+        },
+        {
+          "name": "memory fallback preserves pixels and disposes its data",
+          "passed": true
+        },
+        {
+          "name": "Reset removes owned image storage and cache references",
+          "passed": true,
+          "detail": {
+            "backend": "opfs",
+            "storageBytes": 0,
+            "storageLimit": 2147483648,
+            "cacheBytes": 0,
+            "peakCacheBytes": 14491648,
+            "scratchReserve": 16777216,
+            "rasterVersions": 0,
+            "tileFiles": 0
+          }
+        }
+      ],
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
+    }
+  }
+}

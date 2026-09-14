@@ -5,6 +5,12 @@ The editor supports raster layers, drawing, erasing, cropping, resizing, layer o
 
 Added images initially fit inside the document while retaining their original pixels. Moving, scaling, rotating, and resizing the document preserve that detail. Brush and eraser edits use the layer's full resolution; cropping removes excluded pixels without downscaling the remaining image. Exports use the document's dimensions. Images can be up to 12,000 pixels on each side.
 
+Original pixels and undo history use temporary browser storage on the user's device. The editor prefers OPFS, falls back to IndexedDB, and uses a bounded memory store if neither is available. Nothing is uploaded. These files are temporary working data, not saved projects: export your work before reloading or closing the tab.
+
+Editing uses small image tiles, a bounded cache, and a preview sized to the visible viewport. Large imports and full-resolution exports still need temporary decoding/encoding memory. Choose **Calculate sizes** to encode PNG/JPEG and show their sizes; editing and quality changes no longer encode both formats automatically.
+
+See [image storage and browser validation](docs/image-storage.md) for budgets, cleanup behavior, memory measurements, and tradeoffs.
+
 ## SSL Certificates Setup
 
 Copying images to the clipboard requires a secure page, and SSL certificates enable HTTPS locally. Browsers also trust `http://localhost`, so certificates are optional if you set `HTTPS=false` in `.env`.
@@ -57,6 +63,15 @@ npm test -- --watchAll=false
 ```
 
 The layer regression tests cover retained resolution, transforms, brush coordinates, cropping, resizing, and undo/redo. Verify pixel rendering and clipboard behavior in a browser as well; Jest mocks Canvas 2D.
+
+For actual Canvas, worker, OPFS, and fallback checks in Chrome/Safari:
+
+```sh
+npm run build
+npm run test:browser
+```
+
+Open the printed browser-check URLs. The editor check page generates its own fixtures and intercepts downloads. Use the ordinary editor to manually verify clipboard copying; Safari requires a real user click. These harnesses run only when explicitly opened and are excluded from the production build.
 
 ## How to use
 

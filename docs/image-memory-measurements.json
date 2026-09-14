@@ -1,0 +1,564 @@
+{
+  "baselineCommit": "194c6a4ea01af99e2ad3eacec5a4242c8ae68970",
+  "method": "Native process RSS sampled every second. Fresh tabs; Safari reused its content/graphics processes. Sampled RSS excludes compressed/swapped memory and Chrome GPU allocation, and shared process memory may be counted more than once. Single local run per variant.",
+  "measurements": [
+    {
+      "browser": "chrome",
+      "mode": "baseline",
+      "rendererPid": 3099,
+      "initialMiB": 150.140625,
+      "peakMiB": 2112.359375,
+      "steadyMiB": 1920.15625,
+      "afterResetMiB": 620.09375,
+      "medianStrokeMs": 133.0,
+      "exportMs": 74.60000002384186,
+      "stats": null,
+      "workload": {
+        "kind": "ram-baseline",
+        "phase": "complete",
+        "mode": "baseline",
+        "phases": [
+          {
+            "name": "empty",
+            "time": 1789344015939
+          },
+          {
+            "name": "imported",
+            "time": 1789344019073
+          },
+          {
+            "name": "stroke-10",
+            "time": 1789344023763
+          },
+          {
+            "name": "stroke-20",
+            "time": 1789344025370
+          },
+          {
+            "name": "stroke-30",
+            "time": 1789344027020
+          },
+          {
+            "name": "settling",
+            "time": 1789344027062
+          },
+          {
+            "name": "steady",
+            "time": 1789344033067
+          },
+          {
+            "name": "export-start",
+            "time": 1789344036075
+          },
+          {
+            "name": "export-end",
+            "time": 1789344036157,
+            "milliseconds": 74.60000002384186,
+            "bytes": 354234
+          },
+          {
+            "name": "reset",
+            "time": 1789344039190
+          },
+          {
+            "name": "complete",
+            "time": 1789344045197
+          }
+        ],
+        "times": [
+          196.59999999403954,
+          139,
+          129.80000001192093,
+          133.09999999403954,
+          132.90000000596046,
+          139.60000002384186,
+          129.80000001192093,
+          137.30000001192093,
+          137.59999999403954,
+          125,
+          123.7000000178814,
+          125.89999997615814,
+          133.7000000178814,
+          126.2999999821186,
+          127.5,
+          127.89999997615814,
+          131,
+          132.5,
+          135.69999998807907,
+          125.19999998807907,
+          142.7999999821186,
+          132.10000002384186,
+          119.40000000596046,
+          137.80000001192093,
+          135.2000000178814,
+          134.69999998807907,
+          127.80000001192093,
+          135.19999998807907,
+          133.09999999403954,
+          136.89999997615814
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+      }
+    },
+    {
+      "browser": "chrome",
+      "mode": "tiled",
+      "rendererPid": 4904,
+      "initialMiB": 149.9765625,
+      "peakMiB": 423.375,
+      "steadyMiB": 383.6015625,
+      "afterResetMiB": 270.953125,
+      "medianStrokeMs": 80.09999999403954,
+      "exportMs": 160.69999998807907,
+      "stats": {
+        "backend": "opfs",
+        "storageBytes": 191864928,
+        "storageLimit": 2147483648,
+        "cacheBytes": 46164096,
+        "peakCacheBytes": 50317856,
+        "scratchReserve": 16777216,
+        "rasterVersions": 30,
+        "tileFiles": 196
+      },
+      "workload": {
+        "kind": "ram-tiled",
+        "phase": "complete",
+        "mode": "tiled",
+        "phases": [
+          {
+            "name": "empty",
+            "time": 1789344075916
+          },
+          {
+            "name": "imported",
+            "time": 1789344079656,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 63750000,
+              "storageLimit": 2147483648,
+              "cacheBytes": 50315120,
+              "peakCacheBytes": 50315120,
+              "scratchReserve": 16777216,
+              "rasterVersions": 1,
+              "tileFiles": 65
+            }
+          },
+          {
+            "name": "stroke-10",
+            "time": 1789344083844,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 107753552,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50315120,
+              "scratchReserve": 16777216,
+              "rasterVersions": 11,
+              "tileFiles": 110
+            }
+          },
+          {
+            "name": "stroke-20",
+            "time": 1789344085043,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 151757104,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 21,
+              "tileFiles": 155
+            }
+          },
+          {
+            "name": "stroke-30",
+            "time": 1789344086235,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "settling",
+            "time": 1789344086269,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "steady",
+            "time": 1789344092273,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "export-start",
+            "time": 1789344095280
+          },
+          {
+            "name": "export-end",
+            "time": 1789344095447,
+            "milliseconds": 160.69999998807907,
+            "bytes": 354261
+          },
+          {
+            "name": "reset",
+            "time": 1789344098500
+          },
+          {
+            "name": "complete",
+            "time": 1789344104508,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 0,
+              "storageLimit": 2147483648,
+              "cacheBytes": 0,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 0,
+              "tileFiles": 0
+            }
+          }
+        ],
+        "times": [
+          115.09999999403954,
+          131,
+          75.39999997615814,
+          81.2999999821186,
+          70.60000002384186,
+          78.90000000596046,
+          114.2999999821186,
+          71.90000000596046,
+          81.90000000596046,
+          81.69999998807907,
+          80.09999999403954,
+          128.30000001192093,
+          75.80000001192093,
+          78.40000000596046,
+          83.39999997615814,
+          79,
+          117.80000001192093,
+          75.90000000596046,
+          83,
+          80.09999999403954,
+          98.2000000178814,
+          117.5,
+          75.5,
+          79,
+          82.59999999403954,
+          76.5,
+          117.5,
+          71.10000002384186,
+          76.2999999821186,
+          79.40000000596046
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+      }
+    },
+    {
+      "browser": "safari",
+      "mode": "baseline",
+      "rendererPid": 85274,
+      "initialMiB": 154.9453125,
+      "peakMiB": 406.375,
+      "steadyMiB": 191.734375,
+      "afterResetMiB": 159.6171875,
+      "medianStrokeMs": 38.5,
+      "exportMs": 129,
+      "stats": null,
+      "workload": {
+        "kind": "ram-baseline",
+        "phase": "complete",
+        "mode": "baseline",
+        "phases": [
+          {
+            "name": "empty",
+            "time": 1789344142523
+          },
+          {
+            "name": "imported",
+            "time": 1789344145729
+          },
+          {
+            "name": "stroke-10",
+            "time": 1789344149423
+          },
+          {
+            "name": "stroke-20",
+            "time": 1789344150113
+          },
+          {
+            "name": "stroke-30",
+            "time": 1789344150820
+          },
+          {
+            "name": "settling",
+            "time": 1789344150855
+          },
+          {
+            "name": "steady",
+            "time": 1789344156859
+          },
+          {
+            "name": "export-start",
+            "time": 1789344159866
+          },
+          {
+            "name": "export-end",
+            "time": 1789344160005,
+            "milliseconds": 129,
+            "bytes": 339592
+          },
+          {
+            "name": "reset",
+            "time": 1789344163012
+          },
+          {
+            "name": "complete",
+            "time": 1789344169021
+          }
+        ],
+        "times": [
+          60,
+          44,
+          41,
+          41,
+          38,
+          36,
+          37,
+          36,
+          40,
+          39,
+          37,
+          38,
+          39,
+          40,
+          37,
+          37,
+          41,
+          37,
+          36,
+          36,
+          40,
+          38,
+          39,
+          38,
+          37,
+          43,
+          37,
+          42,
+          40,
+          41
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
+      },
+      "graphicsPid": 83687,
+      "graphicsPeakMiB": 1509.984375,
+      "graphicsSteadyMiB": 1474.5,
+      "combinedSteadyMiB": 1666.234375
+    },
+    {
+      "browser": "safari",
+      "mode": "tiled",
+      "rendererPid": 85274,
+      "initialMiB": 160.703125,
+      "peakMiB": 246.421875,
+      "steadyMiB": 244.875,
+      "afterResetMiB": 244.40625,
+      "medianStrokeMs": 73.5,
+      "exportMs": 496,
+      "stats": {
+        "backend": "opfs",
+        "storageBytes": 191864928,
+        "storageLimit": 2147483648,
+        "cacheBytes": 46164096,
+        "peakCacheBytes": 50317856,
+        "scratchReserve": 16777216,
+        "rasterVersions": 30,
+        "tileFiles": 196
+      },
+      "workload": {
+        "kind": "ram-tiled",
+        "phase": "complete",
+        "mode": "tiled",
+        "phases": [
+          {
+            "name": "empty",
+            "time": 1789344207018
+          },
+          {
+            "name": "imported",
+            "time": 1789344210556,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 63750000,
+              "storageLimit": 2147483648,
+              "cacheBytes": 50315120,
+              "peakCacheBytes": 50315120,
+              "scratchReserve": 16777216,
+              "rasterVersions": 1,
+              "tileFiles": 65
+            }
+          },
+          {
+            "name": "stroke-10",
+            "time": 1789344214591,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 107753552,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50315120,
+              "scratchReserve": 16777216,
+              "rasterVersions": 11,
+              "tileFiles": 110
+            }
+          },
+          {
+            "name": "stroke-20",
+            "time": 1789344215641,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 151757104,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 21,
+              "tileFiles": 155
+            }
+          },
+          {
+            "name": "stroke-30",
+            "time": 1789344216777,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "settling",
+            "time": 1789344216817,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "steady",
+            "time": 1789344222822,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 46164096,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "export-start",
+            "time": 1789344225830
+          },
+          {
+            "name": "export-end",
+            "time": 1789344226334,
+            "milliseconds": 496,
+            "bytes": 339749
+          },
+          {
+            "name": "reset",
+            "time": 1789344229359
+          },
+          {
+            "name": "complete",
+            "time": 1789344235365,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 0,
+              "storageLimit": 2147483648,
+              "cacheBytes": 0,
+              "peakCacheBytes": 50317856,
+              "scratchReserve": 16777216,
+              "rasterVersions": 0,
+              "tileFiles": 0
+            }
+          }
+        ],
+        "times": [
+          95,
+          104,
+          60,
+          66,
+          64,
+          62,
+          103,
+          73,
+          63,
+          61,
+          88,
+          97,
+          74,
+          57,
+          58,
+          59,
+          101,
+          59,
+          84,
+          63,
+          85,
+          94,
+          73,
+          80,
+          74,
+          79,
+          102,
+          68,
+          96,
+          72
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
+      },
+      "graphicsPid": 83687,
+      "graphicsPeakMiB": 240.125,
+      "graphicsSteadyMiB": 235.984375,
+      "combinedSteadyMiB": 480.859375
+    }
+  ]
+}
