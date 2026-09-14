@@ -237,6 +237,7 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
     outputSizes,
     jpegQuality,
     setJpegQuality,
+    isExportBusy,
     
     // Functions
     updateOutputSizes,

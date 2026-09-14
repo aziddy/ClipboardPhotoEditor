@@ -881,7 +881,7 @@ function UnifiedPhotoEditor() {
       return { blob, revision: getDocumentVisualSignature(sourceDoc) };
     }, { rethrow: true }),
   }), [documentVisualSignature, runPixelOperation]);
-  const { resetExportState, ExportControls } = useImageExportControls(exportProvider, toast, 'edited', { automaticSizeUpdates: false });
+  const { isExportBusy, resetExportState, handleCopyToPNG, ExportControls } = useImageExportControls(exportProvider, toast, 'edited', { automaticSizeUpdates: false });
   const {
     ocrText,
     ocrWords,
@@ -2065,7 +2065,16 @@ function UnifiedPhotoEditor() {
 
           <Flex flex="1" />
 
-          <HStack spacing={2}>
+          <Flex align="center" gap={2} wrap="wrap">
+            <Button
+              leftIcon={<Copy size={17} />}
+              colorScheme="blue"
+              onClick={handleCopyToPNG}
+              isDisabled={!hasDocument(doc) || isBusy || isExportBusy}
+              size="sm"
+            >
+              Copy as PNG
+            </Button>
             <Button
               leftIcon={<Upload size={17} />}
               colorScheme="blue"
@@ -2148,7 +2157,7 @@ function UnifiedPhotoEditor() {
                 size="sm"
               />
             </Tooltip>
-          </HStack>
+          </Flex>
         </Flex>
 
         <input
