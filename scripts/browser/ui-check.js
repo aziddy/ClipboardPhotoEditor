@@ -34,7 +34,7 @@ if (new URLSearchParams(window.location.search).get('uicheck') === 'ocr') {
       if (fn()) return;
       await pause();
     }
-    throw new Error('Timed out waiting for UI');
+    throw new Error(`Timed out waiting for UI (visibility: ${document.visibilityState}, focused: ${document.hasFocus()})`);
   };
   const visible = element => element.getClientRects().length > 0;
   const button = name => [...document.querySelectorAll('button')].find(b => visible(b) && (b.getAttribute('aria-label') === name || b.textContent.trim() === name));
@@ -67,7 +67,8 @@ if (new URLSearchParams(window.location.search).get('uicheck') === 'ocr') {
     document.title = 'Checking: ' + name;
     await fetch('/ui-results', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'ui-progress', userAgent: navigator.userAgent, phase: name, results }),
+      body: JSON.stringify({ kind: 'ui-progress', userAgent: navigator.userAgent, phase: name, results,
+        visibility: document.visibilityState, focused: document.hasFocus() }),
     });
     try {
       const detail = await fn();
@@ -80,7 +81,8 @@ if (new URLSearchParams(window.location.search).get('uicheck') === 'ocr') {
       results.push({
         name,
         passed: false,
-        error: error.message + '\n' + error.stack
+        error: error.message + '\n' + error.stack,
+        detail: error.detail
       });
     }
   };
@@ -350,11 +352,78 @@ if (new URLSearchParams(window.location.search).get('uicheck') === 'ocr') {
       assert(inputs.length === 1, 'Layer controls missing');
       const row = inputs[0].parentElement.parentElement;
       const slider = row.querySelector('[role=slider]');
-      await sliderTo(slider, 50);
-      assert(different(main(), drawn) > .1, 'Opacity had no effect');
-      await sliderTo(slider, 100);
-      await until(() => sameDisplay(main(), drawn));
+      const originalPixels = await exportedCanvas();
+      const originalPostMessage = Worker.prototype.postMessage;
+      const workers = new Map();
+      const start = performance.now();
+      const diagnostics = { requests: [] };
+      const elapsed = () => Math.round(performance.now() - start);
+      Worker.prototype.postMessage = function (...args) {
+        const request = args[0];
+        if (['render', 'prepareDrawing', 'exportBlob'].includes(request?.method)) {
+          let worker = workers.get(this);
+          if (!worker) {
+            const pending = new Map();
+            const listener = ({ data }) => {
+              const entry = pending.get(data.id);
+              if (!entry) return;
+              entry.completedMs = elapsed();
+              pending.delete(data.id);
+            };
+            worker = { pending, listener };
+            workers.set(this, worker);
+            this.addEventListener('message', listener);
+          }
+          const layer = request.args.doc?.layers.find(layer => layer.id === request.args.doc.activeLayerId);
+          const entry = { method: request.method, opacity: layer?.opacity, startedMs: elapsed() };
+          diagnostics.requests.push(entry);
+          worker.pending.set(request.id, entry);
+        }
+        return originalPostMessage.apply(this, args);
+      };
+      const pendingVisuals = () => [...workers.values()].flatMap(worker => [...worker.pending.values()])
+        .filter(entry => entry.method !== 'exportBlob');
+      let halfOpacityPixels;
+      try {
+        await sliderTo(slider, 50);
+        diagnostics.sliderOpacity = Number(slider.getAttribute('aria-valuenow'));
+        diagnostics.initial = {
+          elapsedMs: elapsed(), difference: displayDifference(main(), drawn),
+          pendingVisuals: pendingVisuals().map(entry => ({ ...entry })),
+        };
+        // Metadata changes can outpace the worker. Wait for the requested
+        // previews to complete, rather than treating a fixed delay as readiness.
+        await until(() => pendingVisuals().length === 0);
+        await pause(32);
+        diagnostics.settled = { elapsedMs: elapsed(), difference: displayDifference(main(), drawn) };
+        halfOpacityPixels = await exportedCanvas();
+        const sample = canvas => Array.from(canvas.getContext('2d').getImageData(300, 300, 1, 1).data);
+        diagnostics.native = {
+          meanDifference: different(originalPixels, halfOpacityPixels),
+          originalSample: sample(originalPixels), halfOpacitySample: sample(halfOpacityPixels),
+        };
+        assert(diagnostics.sliderOpacity === 50, 'Opacity slider did not retain its requested value');
+        assert(diagnostics.settled.difference.mean > .1, 'Opacity had no effect after preview completion');
+        assert(diagnostics.native.meanDifference > .1, 'Opacity had no effect in exported pixels');
+      } catch (error) {
+        error.detail = diagnostics;
+        throw error;
+      } finally {
+        try {
+          // A failed opacity check must not leave the next crop/resize checks
+          // comparing a deliberately transparent document with the opaque one.
+          await sliderTo(slider, 100);
+          await until(() => pendingVisuals().length === 0);
+          await until(() => sameDisplay(main(), drawn));
+        } finally {
+          Worker.prototype.postMessage = originalPostMessage;
+          workers.forEach((worker, instance) => instance.removeEventListener('message', worker.listener));
+          originalPixels.width = 1;
+          if (halfOpacityPixels) halfOpacityPixels.width = 1;
+        }
+      }
       assert(sameDisplay(main(), drawn), 'Opacity did not restore output');
+      return diagnostics;
     });
     await check('Document resize down and back preserves the composed pixels', async () => {
       for (const width of [300, 600]) {
@@ -366,13 +435,81 @@ if (new URLSearchParams(window.location.search).get('uicheck') === 'ocr') {
       await click('Brush');
       assert(sameDisplay(main(), drawn), 'Resize discarded pixels');
     });
-    await check('Crop changes dimensions and undo restores the complete image', async () => {
+    await check('Crop dragging at fit and zoom/pan reuses pixels, and apply/undo restores the image', async () => {
       await click('Crop');
+      const canvas = main();
+      const drag = async (from, to) => {
+        const originalCapture = canvas.setPointerCapture;
+        canvas.setPointerCapture = () => {};
+        const emit = (type, point) => canvas.dispatchEvent(new PointerEvent(type, {
+          pointerId: 3, pointerType: 'mouse', isPrimary: true, button: 0,
+          buttons: type === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true,
+          clientX: point.x, clientY: point.y,
+        }));
+        try {
+          emit('pointerdown', from);
+          for (let step = 1; step <= 8; step += 1) {
+            emit('pointermove', {
+              x: from.x + (to.x - from.x) * step / 8,
+              y: from.y + (to.y - from.y) * step / 8,
+            });
+            await pause(20);
+          }
+        } finally {
+          emit('pointerup', to);
+          canvas.setPointerCapture = originalCapture;
+        }
+        await idle();
+      };
+      const moveCrop = async (dx, dy) => {
+        const overlay = document.querySelector('[data-editor-crop-overlay="true"]');
+        assert(overlay, 'Crop overlay missing');
+        assert(getComputedStyle(overlay).pointerEvents === 'none', 'Crop overlay intercepts pointer input');
+        const outline = overlay.querySelector('rect[stroke="#ffffff"]');
+        const before = Object.fromEntries(['x', 'y', 'width', 'height'].map(key => [key, Number(outline.getAttribute(key))]));
+        const rect = overlay.getBoundingClientRect();
+        const scaleX = rect.width / dims().width;
+        const scaleY = rect.height / dims().height;
+        const from = {
+          x: rect.left + (before.x + before.width / 2) * scaleX,
+          y: rect.top + (before.y + before.height / 2) * scaleY,
+        };
+        const pixels = copyCanvas(canvas);
+        const originalPostMessage = Worker.prototype.postMessage;
+        let renderRequests = 0;
+        Worker.prototype.postMessage = function (...args) {
+          if (args[0]?.method === 'render') renderRequests += 1;
+          return originalPostMessage.apply(this, args);
+        };
+        try {
+          await drag(from, { x: from.x + dx * scaleX, y: from.y + dy * scaleY });
+          assert(Number(outline.getAttribute('x')) === before.x + dx, 'Crop x does not follow the pointer at the current zoom/pan');
+          assert(Number(outline.getAttribute('y')) === before.y + dy, 'Crop y does not follow the pointer at the current zoom/pan');
+          assert(Number(outline.getAttribute('width')) === before.width && Number(outline.getAttribute('height')) === before.height, 'Moving crop changed its size');
+          assert(renderRequests === 0, 'Crop drag requested ' + renderRequests + ' worker raster frames');
+          assert(different(canvas, pixels) === 0, 'Crop drag changed the underlying image pixels');
+          return { renderRequests, dx, dy };
+        } finally {
+          Worker.prototype.postMessage = originalPostMessage;
+          pixels.width = 1;
+        }
+      };
+      const fit = await moveCrop(18, 12);
+      await click('Zoom in');
+      await click('Zoom in');
+      await click('Pan');
+      const bounds = canvas.getBoundingClientRect();
+      const center = { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+      await drag(center, { x: center.x + 18, y: center.y - 12 });
+      await click('Crop');
+      const zoomed = await moveCrop(-18, -12);
+      await click('Reset zoom to 100%');
       await click('Apply Crop');
       assert(dims().width === 480 && dims().height === 384, 'Crop dimensions incorrect');
       await click('Undo');
       await click('Brush');
       assert(sameDisplay(main(), drawn), 'Crop undo lost pixels');
+      return { fit, zoomed };
     });
     await check('Explicit output sizes do not run automatically', async () => {
       assert(button('Calculate sizes'), 'Size calculation control missing');
@@ -478,7 +615,9 @@ if (new URLSearchParams(window.location.search).get('uicheck') === 'ocr') {
     passed: results.filter(r => r.passed).length,
     total: results.length,
     results,
-    userAgent: navigator.userAgent
+    userAgent: navigator.userAgent,
+    visibility: document.visibilityState,
+    focused: document.hasFocus()
   };
   window.editorUiResults = output;
   const status = document.createElement('pre');

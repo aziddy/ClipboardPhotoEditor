@@ -8,6 +8,8 @@ import {
 
 const tileKey = (x, y) => `${x},${y}`;
 const coordinates = (key) => key.split(',').map(Number);
+const PREVIEW_MEMORY_LIMIT = 16 * 1024 * 1024;
+const PREVIEW_DIMENSION_LIMIT = 4096;
 const releaseCanvas = (canvas) => { canvas.width = 1; canvas.height = 1; };
 const surface = (width, height) => {
   const canvas = new OffscreenCanvas(Math.max(1, width), Math.max(1, height));
@@ -48,6 +50,14 @@ export class RasterEngine {
     this.tileMemoryLimit = options.tileMemoryLimit ?? RASTER_MEMORY_LIMIT - RASTER_SCRATCH_RESERVE;
     this.dirtyLimit = Math.min(options.dirtyLimit ?? RASTER_DIRTY_LIMIT, this.tileMemoryLimit);
     this.cache = new RasterCache(this.tileMemoryLimit);
+    this.previewMemoryLimit = Math.max(0, Math.min(options.previewMemoryLimit ?? PREVIEW_MEMORY_LIMIT, this.tileMemoryLimit));
+    this.previewCache = new RasterCache(this.previewMemoryLimit, (entry) => {
+      if (entry.canvas) releaseCanvas(entry.canvas);
+    });
+    this.previewCacheHits = 0;
+    this.previewCacheMisses = 0;
+    this.previewFrameKeys = null;
+    this.peakResidentRasterBytes = 0;
     this.dirtyTiles = new Map();
     this.dirtyBytes = 0;
     this.peakDirtyBytes = 0;
@@ -72,6 +82,11 @@ export class RasterEngine {
       dirtyBytes: this.dirtyBytes, peakDirtyBytes: this.peakDirtyBytes,
       residentTileBytes: this.cache.bytes + this.dirtyBytes,
       peakResidentTileBytes: this.peakResidentBytes, tileMemoryLimit: this.tileMemoryLimit,
+      previewCacheBytes: this.previewCache.bytes, peakPreviewCacheBytes: this.previewCache.peakBytes,
+      previewMemoryLimit: this.previewMemoryLimit,
+      previewCacheHits: this.previewCacheHits, previewCacheMisses: this.previewCacheMisses,
+      residentRasterBytes: this.cache.bytes + this.dirtyBytes + this.previewCache.bytes,
+      peakResidentRasterBytes: this.peakResidentRasterBytes,
       dirtyLimit: this.dirtyLimit,
       scratchReserve: RASTER_SCRATCH_RESERVE, rasterVersions: this.versions.size,
       tileFiles: this.files.size,
@@ -147,6 +162,7 @@ export class RasterEngine {
     const before = this.bytes;
     for (const version of this.versions.values()) {
       if (protectedIds.has(version.id)) continue;
+      this.invalidatePreview(version.id);
       version.levels.slice(1).forEach((level) => level.clear());
       version.mipsReady = false;
     }
@@ -164,11 +180,77 @@ export class RasterEngine {
   recordResidentBytes() {
     this.peakDirtyBytes = Math.max(this.peakDirtyBytes, this.dirtyBytes);
     this.peakResidentBytes = Math.max(this.peakResidentBytes, this.cache.bytes + this.dirtyBytes);
+    this.peakResidentRasterBytes = Math.max(this.peakResidentRasterBytes, this.cache.bytes + this.dirtyBytes + this.previewCache.bytes);
+  }
+
+  updateCacheLimits() {
+    this.previewCache.setLimit(Math.min(this.previewMemoryLimit, this.tileMemoryLimit - this.dirtyBytes));
+    this.cache.setLimit(this.tileMemoryLimit - this.dirtyBytes - this.previewCache.bytes);
+  }
+
+  invalidatePreview(versionId, level) {
+    for (const [key, entry] of this.previewCache.entries) {
+      if (entry.versionId === versionId && (level === undefined || entry.level === level)) this.previewCache.delete(key);
+    }
+    this.updateCacheLimits();
+  }
+
+  async previewSource(version, level) {
+    // Committed source levels are immutable between writes. Cache their canvases
+    // so transforms reuse browser graphics resources instead of uploading and
+    // reconstructing overlapping patches every frame. Export keeps its exact path.
+    if (this.stroke?.version === version) return null;
+    const width = Math.ceil(version.width / (2 ** level));
+    const height = Math.ceil(version.height / (2 ** level));
+    const byteLength = width * height * 4;
+    if (width > PREVIEW_DIMENSION_LIMIT || height > PREVIEW_DIMENSION_LIMIT || byteLength > this.previewCache.limit) return null;
+    const key = `${version.id}:${level}`;
+    const cached = this.previewCache.get(key);
+    if (cached && !cached.invalid && !cached.canvas.getContext('2d').isContextLost?.()) {
+      this.previewFrameKeys?.add(key);
+      this.previewCacheHits += 1;
+      return cached.canvas;
+    }
+    if (cached) { this.previewCache.delete(key); this.updateCacheLimits(); }
+    // A document may have more layers than fit in the cache. Protect surfaces
+    // already drawn this frame so large layers cannot evict each other forever.
+    const evictable = [...this.previewCache.entries].filter(([id]) => !this.previewFrameKeys?.has(id));
+    const available = this.previewCache.limit - this.previewCache.bytes + evictable.reduce((sum, [, entry]) => sum + entry.byteLength, 0);
+    if (byteLength > available) return null;
+    for (const [id] of evictable) {
+      if (this.previewCache.bytes + byteLength <= this.previewCache.limit) break;
+      this.previewCache.delete(id);
+    }
+    this.previewCacheMisses += 1;
+    // Reserve before allocation/reads, shrinking the raw tile cache to keep both
+    // representations inside the same resident working-memory budget.
+    const entry = { versionId: version.id, level, byteLength, canvas: null };
+    this.previewCache.set(key, entry);
+    this.previewFrameKeys?.add(key);
+    this.updateCacheLimits();
+    this.recordResidentBytes();
+    try {
+      entry.canvas = await this.readRegion(version, level, 0, 0, width, height);
+      // Restoration clears the backing pixels even if it completes before the
+      // next render can observe isContextLost(). Rebuild either way.
+      const invalidate = () => { entry.invalid = true; };
+      entry.canvas.addEventListener('contextlost', invalidate);
+      entry.canvas.addEventListener('contextrestored', invalidate);
+      // The graphics surface replaces these clean cached pixels; keep originals
+      // in storage without retaining two working-cache copies of the same level.
+      version.levels[level].forEach((tile) => this.cache.delete(tile.id));
+      return entry.canvas;
+    } catch (error) {
+      this.previewCache.delete(key);
+      this.updateCacheLimits();
+      throw error;
+    }
   }
 
   async writeTile(version, level, tx, ty, { data, width, height, bounds, id = createLayerId() }, cache = true) {
     this.checkCanceled();
     const key = tileKey(tx, ty);
+    this.invalidatePreview(version.id, level);
     if (!bounds) { version.levels[level].delete(key); return; }
     while (true) {
       try {
@@ -193,7 +275,7 @@ export class RasterEngine {
     this.stroke.dirty.delete(key);
     this.dirtyTiles.delete(tile.id);
     this.dirtyBytes -= tile.data.byteLength;
-    this.cache.setLimit(this.tileMemoryLimit - this.dirtyBytes);
+    this.updateCacheLimits();
   }
 
   async flushDirtyTile(key) {
@@ -211,6 +293,7 @@ export class RasterEngine {
     this.checkCanceled();
     const stroke = this.stroke;
     const key = tileKey(tx, ty);
+    this.invalidatePreview(stroke.version.id, 0);
     const { width, height } = canvas;
     const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
     const bounds = alphaBounds(data, width, height);
@@ -235,7 +318,7 @@ export class RasterEngine {
       }
       tile = { id: createLayerId(), data, width, height, bounds };
       this.dirtyBytes += data.byteLength;
-      this.cache.setLimit(this.tileMemoryLimit - this.dirtyBytes);
+      this.updateCacheLimits();
       this.dirtyTiles.set(tile.id, tile);
     }
     stroke.dirty.set(key, tile);
@@ -356,7 +439,7 @@ export class RasterEngine {
     }
     const files = new Set();
     for (const [id, version] of this.versions) {
-      if (!retained.has(id)) { this.versions.delete(id); continue; }
+      if (!retained.has(id)) { this.invalidatePreview(id); this.versions.delete(id); continue; }
       version.levels.forEach((level) => level.forEach((tile) => files.add(tile.id)));
     }
     for (const [id, bytes] of this.files) {
@@ -548,6 +631,8 @@ export class RasterEngine {
     const top = Math.max(0, Math.floor(imageBounds.y) - 2);
     const right = Math.min(width, Math.ceil(imageBounds.x + imageBounds.width) + 2);
     const bottom = Math.min(height, Math.ceil(imageBounds.y + imageBounds.height) + 2);
+    if (right <= left || bottom <= top) return;
+    const preview = fullResolution ? null : await this.previewSource(version, level);
     const levelWidth = Math.ceil(version.width / (2 ** level));
     const levelHeight = Math.ceil(version.height / (2 ** level));
     const padding = Math.min(128, Math.ceil(4 * Math.max(1, Math.hypot(inverse[0], inverse[1]), Math.hypot(inverse[2], inverse[3]))));
@@ -570,8 +655,11 @@ export class RasterEngine {
         return;
       }
       if (sw * sh > 1024 * 1024) throw new Error('This transform needs too much working memory. Reduce its stretch.');
-      const patch = await this.readRegion(version, level, sx, sy, sw, sh);
+      const patch = preview ? surface(sw, sh) : await this.readRegion(version, level, sx, sy, sw, sh);
       try {
+        // Preserve the original sampling footprint. Some browsers filter large
+        // source canvases differently even when drawn through a smaller clip.
+        if (preview) patch.getContext('2d').drawImage(preview, -sx, -sy);
         ctx.save();
         // Integer destination clips partition the output without overlapping alpha.
         // Each source patch includes neighboring samples, even across tile edges.
@@ -592,6 +680,7 @@ export class RasterEngine {
 
   async composite({ doc, width = doc.width, height = doc.height, view = [1, 0, 0, 1, 0, 0], fullResolution = false }) {
     this.inUse = new Set(doc.layers.map((layer) => layer.rasterId));
+    this.previewFrameKeys = new Set();
     let canvas;
     try {
       canvas = surface(width, height);
@@ -602,7 +691,7 @@ export class RasterEngine {
       for (const layer of doc.layers) await this.renderLayer(ctx, layer, view, width, height, fullResolution);
       return canvas;
     } catch (error) { if (canvas) releaseCanvas(canvas); throw error; }
-    finally { this.inUse.clear(); }
+    finally { this.inUse.clear(); this.previewFrameKeys = null; }
   }
 
   async render(options) {
@@ -658,6 +747,7 @@ export class RasterEngine {
     this.canceled = true;
     this.stroke = null; this.current = []; this.history = [];
     this.pending.clear(); this.versions.clear(); this.files.clear(); this.cache.clear(); this.bytes = 0;
+    this.previewCache.clear();
     this.dirtyTiles.clear(); this.dirtyBytes = 0;
     this.cache.setLimit(this.tileMemoryLimit);
     this.inUse.clear(); this.droppedHistory.clear();

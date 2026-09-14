@@ -12,8 +12,9 @@ export const storageFull = () => Object.assign(
 );
 
 export class RasterCache {
-  constructor(limit = RASTER_MEMORY_LIMIT - RASTER_SCRATCH_RESERVE) {
+  constructor(limit = RASTER_MEMORY_LIMIT - RASTER_SCRATCH_RESERVE, onEvict = null) {
     this.limit = limit;
+    this.onEvict = onEvict;
     this.bytes = 0;
     this.peakBytes = 0;
     this.entries = new Map();
@@ -46,13 +47,15 @@ export class RasterCache {
 
   delete(id) {
     const value = this.entries.get(id);
-    if (value) this.bytes -= value.byteLength;
+    if (value) {
+      this.bytes -= value.byteLength;
+      this.onEvict?.(value);
+    }
     this.entries.delete(id);
   }
 
   clear() {
-    this.entries.clear();
-    this.bytes = 0;
+    for (const id of this.entries.keys()) this.delete(id);
   }
 }
 

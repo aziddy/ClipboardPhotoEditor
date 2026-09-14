@@ -8,8 +8,9 @@ Layers contain raster IDs, dimensions, bounds, and transforms. Undo snapshots an
 
 | Resource | Budget / behavior |
 | --- | --- |
-| Clean and dirty native tiles together | 80 MiB, clean LRU cache shrinks as dirty tiles grow |
+| Clean/dirty native tiles and retained preview surfaces together | 80 MiB, clean LRU cache shrinks as dirty tiles or preview surfaces grow |
 | Unpersisted stroke tiles | 32 MiB maximum, included in the 80 MiB pool; pressure spills to disk |
+| Retained source preview surfaces | At most 16 MiB, included in the same 80 MiB pool |
 | Tile working surfaces | 16 MiB allowance; source sampling patches are bounded |
 | Live drawing planes | At most 24 MiB including installation; retained planes use at most 18 MiB |
 | Accepted drawing coordinates | 4 MiB including one 64 KiB transferable batch; at most 2,048 stroke headers |
@@ -20,6 +21,33 @@ Layers contain raster IDs, dimensions, bounds, and transforms. Undo snapshots an
 | Main canvas | Visible viewport dimensions × device pixel ratio |
 
 The 96 MiB tile-work budget is **not a cap on browser RAM**. The live drawing planes and coordinate journal have separate limits. Initial image decoding, a full-resolution export surface and its encoder, the main viewport canvas, OCR, browser allocators, GPU resources, and filesystem caching require additional memory. Very large imports/exports can still create substantial peaks. Browsers decide when freed allocations are returned to the OS.
+
+### Reusable source previews
+
+Viewport rendering can retain a committed source level as a Canvas 2D surface when its dimensions are at most 4,096 pixels per side and its RGBA allocation fits the 16 MiB preview allowance. Moving, rotating, changing opacity, and panning reuse it instead of reconstructing overlapping patches from raw tile arrays. The renderer still copies bounded sampling patches before transforming them: directly scaling a retained full source changed Safari's filtering in browser comparisons.
+
+Preview allocation reserves room in the existing 80 MiB pool before reading source tiles. Once assembled, the surface replaces that level's clean pixel-cache entries; original tiles remain in temporary storage. Sources already used in a frame are protected from eviction for the rest of that frame, so documents larger than the preview allowance use the original patch path for the remaining layers instead of continually rebuilding every cached layer.
+
+Writes, transparent-tile deletion, history collection, context loss/restoration, and reset invalidate or release the relevant surfaces. Active stroke versions bypass this cache. Full-resolution exports retain their original rendering and encoding path. Crop shading and handles use a noninteractive SVG overlay, so dragging them does not request new image frames or retain another bitmap.
+
+Idle layer opacity, visibility, and name changes preserve in-flight drawing preparation, allowing the drawing controller to coalesce intermediate metadata into the latest requested view. They no longer cancel and requeue preparation or briefly block subsequent slider changes. Accepted strokes still finish before metadata changes are applied.
+
+This uses the existing Canvas 2D renderer; the browser chooses its graphics backing. It does not introduce WebGPU or request a high-performance GPU. The opt-in `/preview-check.html` harness compares the cache disabled/enabled, reports cold and repeated render timings for shared and independent 12-megapixel sources, and verifies pixel output, cache reuse, the combined memory allowance, and reset cleanup. Keep the browser foregrounded. Each submission waits for an animation frame before starting its clock, and hidden or stalled runs are invalid for timing. Timings cover worker rendering, bitmap delivery, and canvas presentation calls; they do not measure GPU completion, physical display latency, energy use, or whole-browser RAM. Reduced preview comparisons allow at most one channel unit and mean difference 0.001; native and PNG comparisons remain exact.
+
+On September 14, 2026, Chrome 152 and Safari 27 each passed all 16 preview checks on this Mac. The following measurements use 30 paced frames per case, after warmup; the values are cache disabled → enabled, in milliseconds. [Recorded runs](preview-performance-validation.json) include cold timings, individual frames, pixel differences, and memory counters.
+
+| Browser / workload | Median render work | p95 render work |
+| --- | --- | --- |
+| Chrome, three layers sharing a source, 1000 × 750 | 2.6 → 1.0 | 8.4 → 3.7 |
+| Chrome, three independent sources, 800 × 600 | 2.9 → 1.4 | 14.9 → 3.5 |
+| Chrome, three independent sources, 1600 × 1200 | 18.6 → 20.1 | 62.0 → 41.9 |
+| Safari, three layers sharing a source, 1000 × 750 | 27 → 18 | 34 → 21 |
+| Safari, three independent sources, 800 × 600 | 26 → 18 | 29 → 20 |
+| Safari, three independent sources, 1600 × 1200 | 81 → 72 | 87 → 80 |
+
+The largest Chrome case had a slightly higher median despite an improved p95; these are workload observations, not universal speedup claims. Neither pressure case rebuilt admitted source surfaces during its measured frames, and combined resident allocations stayed within 80 MiB. The harness uses memory-backed storage to exclude disk variability, so its counters do not demonstrate reduced physical RAM: that storage still owns the original arrays. Battery use was not measured.
+
+The production build, ESLint, and all 85 Jest tests pass. Chrome and Safari each also pass 12 native engine checks, 14 editor interaction checks, and the pending-drawing barrier check with 250 ms artificial worker delays. Crop drags at fit and zoom/pan issue zero worker render requests, opacity changes reach the final value, and PNG export/undo checks preserve source pixels. [Editor validation summary](preview-editor-validation.json) records these results.
 
 Raw tiles trade disk space for fast reads and exact pixels. Smaller preview levels reduce preview rendering cost. A cold image or a large export may take longer than it did with every original canvas already in RAM.
 

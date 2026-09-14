@@ -1,0 +1,305 @@
+{
+  "date": "2026-09-14",
+  "jest": {
+    "passed": 85,
+    "total": 85
+  },
+  "productionBuild": "passed",
+  "eslint": "passed",
+  "runs": [
+    {
+      "browser": "chrome",
+      "editor": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "complete": true,
+        "passed": 14,
+        "total": 14,
+        "results": [
+          {
+            "name": "Upload starts the document at 600×480",
+            "passed": true
+          },
+          {
+            "name": "Paste adds a fitted full-resolution image layer",
+            "passed": true
+          },
+          {
+            "name": "Move slider retains original detail in PNG output",
+            "passed": true
+          },
+          {
+            "name": "Brush edits render immediately and survive undo/redo",
+            "passed": true
+          },
+          {
+            "name": "Duplicate and eraser edits do not change the original layer",
+            "passed": true
+          },
+          {
+            "name": "Layer opacity and visibility remain functional",
+            "passed": true
+          },
+          {
+            "name": "Document resize down and back preserves the composed pixels",
+            "passed": true
+          },
+          {
+            "name": "Crop dragging at fit and zoom/pan reuses pixels, and apply/undo restores the image",
+            "passed": true,
+            "detail": {
+              "fit": {
+                "renderRequests": 0,
+                "dx": 18,
+                "dy": 12
+              },
+              "zoomed": {
+                "renderRequests": 0,
+                "dx": -18,
+                "dy": -12
+              }
+            }
+          },
+          {
+            "name": "Explicit output sizes do not run automatically",
+            "passed": true
+          },
+          {
+            "name": "PNG/JPEG downloads and JPEG quality use the composed document",
+            "passed": true
+          },
+          {
+            "name": "Reset clears the document and history",
+            "passed": true
+          },
+          {
+            "name": "Drop imports an image and touch strokes edit the active layer",
+            "passed": true
+          },
+          {
+            "name": "Reset cancels an in-flight import and accepts a new image",
+            "passed": true
+          },
+          {
+            "name": "Reset cancels an in-flight brush stroke",
+            "passed": true
+          }
+        ]
+      },
+      "engine": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "complete": true,
+        "passed": 12,
+        "total": 12,
+        "results": [
+          {
+            "name": "OPFS worker initializes",
+            "passed": true
+          },
+          {
+            "name": "Import and native-resolution output preserve every pixel",
+            "passed": true
+          },
+          {
+            "name": "Repeated shrinking/enlarging retains source detail",
+            "passed": true
+          },
+          {
+            "name": "Brush crosses tile edges and previous version stays unchanged",
+            "passed": true
+          },
+          {
+            "name": "Eraser, cancel, and crop retain independent pixels",
+            "passed": true
+          },
+          {
+            "name": "Rotated transparent tile boundaries have no seams",
+            "passed": true
+          },
+          {
+            "name": "SVG import keeps its native dimensions",
+            "passed": true
+          },
+          {
+            "name": "Another session cannot delete an active session",
+            "passed": true
+          },
+          {
+            "name": "A later session removes abandoned OPFS files",
+            "passed": true
+          },
+          {
+            "name": "indexeddb fallback preserves pixels and disposes its data",
+            "passed": true
+          },
+          {
+            "name": "memory fallback preserves pixels and disposes its data",
+            "passed": true
+          },
+          {
+            "name": "Reset removes owned image storage and cache references",
+            "passed": true
+          }
+        ]
+      },
+      "delayedDrawing": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "complete": true,
+        "passed": 1,
+        "total": 1,
+        "results": [
+          {
+            "name": "Pending drawing survives sizes, export, Undo/Redo, layer selection and view changes",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "browser": "safari",
+      "editor": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15",
+        "complete": true,
+        "passed": 14,
+        "total": 14,
+        "results": [
+          {
+            "name": "Upload starts the document at 600×480",
+            "passed": true
+          },
+          {
+            "name": "Paste adds a fitted full-resolution image layer",
+            "passed": true
+          },
+          {
+            "name": "Move slider retains original detail in PNG output",
+            "passed": true
+          },
+          {
+            "name": "Brush edits render immediately and survive undo/redo",
+            "passed": true
+          },
+          {
+            "name": "Duplicate and eraser edits do not change the original layer",
+            "passed": true
+          },
+          {
+            "name": "Layer opacity and visibility remain functional",
+            "passed": true
+          },
+          {
+            "name": "Document resize down and back preserves the composed pixels",
+            "passed": true
+          },
+          {
+            "name": "Crop dragging at fit and zoom/pan reuses pixels, and apply/undo restores the image",
+            "passed": true,
+            "detail": {
+              "fit": {
+                "renderRequests": 0,
+                "dx": 18,
+                "dy": 12
+              },
+              "zoomed": {
+                "renderRequests": 0,
+                "dx": -18,
+                "dy": -12
+              }
+            }
+          },
+          {
+            "name": "Explicit output sizes do not run automatically",
+            "passed": true
+          },
+          {
+            "name": "PNG/JPEG downloads and JPEG quality use the composed document",
+            "passed": true
+          },
+          {
+            "name": "Reset clears the document and history",
+            "passed": true
+          },
+          {
+            "name": "Drop imports an image and touch strokes edit the active layer",
+            "passed": true
+          },
+          {
+            "name": "Reset cancels an in-flight import and accepts a new image",
+            "passed": true
+          },
+          {
+            "name": "Reset cancels an in-flight brush stroke",
+            "passed": true
+          }
+        ]
+      },
+      "engine": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15",
+        "complete": true,
+        "passed": 12,
+        "total": 12,
+        "results": [
+          {
+            "name": "OPFS worker initializes",
+            "passed": true
+          },
+          {
+            "name": "Import and native-resolution output preserve every pixel",
+            "passed": true
+          },
+          {
+            "name": "Repeated shrinking/enlarging retains source detail",
+            "passed": true
+          },
+          {
+            "name": "Brush crosses tile edges and previous version stays unchanged",
+            "passed": true
+          },
+          {
+            "name": "Eraser, cancel, and crop retain independent pixels",
+            "passed": true
+          },
+          {
+            "name": "Rotated transparent tile boundaries have no seams",
+            "passed": true
+          },
+          {
+            "name": "SVG import keeps its native dimensions",
+            "passed": true
+          },
+          {
+            "name": "Another session cannot delete an active session",
+            "passed": true
+          },
+          {
+            "name": "A later session removes abandoned OPFS files",
+            "passed": true
+          },
+          {
+            "name": "indexeddb fallback preserves pixels and disposes its data",
+            "passed": true
+          },
+          {
+            "name": "memory fallback preserves pixels and disposes its data",
+            "passed": true
+          },
+          {
+            "name": "Reset removes owned image storage and cache references",
+            "passed": true
+          }
+        ]
+      },
+      "delayedDrawing": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15",
+        "complete": true,
+        "passed": 1,
+        "total": 1,
+        "results": [
+          {
+            "name": "Pending drawing survives sizes, export, Undo/Redo, layer selection and view changes",
+            "passed": true
+          }
+        ]
+      }
+    }
+  ]
+}

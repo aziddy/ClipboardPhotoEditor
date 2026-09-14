@@ -82,7 +82,8 @@ const fixture = (overrides = {}) => {
     layerId: 'layer', point, size: 12, color: '#ff0000', erase, pointerId: 1,
   });
   return { controller, client, calls, canvas, options, begin, bitmapSets,
-    onCommit, onStateChange, onError, onInvalidate, getDoc: () => doc };
+    onCommit, onStateChange, onError, onInvalidate, getDoc: () => doc,
+    setDoc: (nextDoc) => { doc = nextDoc; } };
 };
 
 test('drawing reaches the next animation frame while native writes are still blocked', async () => {
@@ -267,6 +268,35 @@ test('preparation sizes the display canvas and coalesces obsolete view requests'
   expect(callCount).toBe(2);
   expect(setup.canvas.width).toBe(800); expect(setup.canvas.height).toBe(600);
   obsolete.forEach((bitmap) => expect(bitmap.close).toHaveBeenCalledTimes(1));
+  setup.controller.dispose();
+});
+
+test('rapid idle opacity changes prepare only the latest metadata and composite its alpha once', async () => {
+  const first = deferred(); const second = deferred(); let callCount = 0;
+  const obsolete = Array.from({ length: 3 }, () => ({ close: jest.fn() }));
+  const latest = Array.from({ length: 3 }, () => ({ close: jest.fn() }));
+  const setup = fixture({ prepareDrawing: () => ++callCount === 1 ? first.promise : second.promise });
+  const opacityOptions = (opacity) => {
+    setup.setDoc({ ...setup.getDoc(), layers: setup.getDoc().layers.map(layer => ({ ...layer, opacity })) });
+    return { ...setup.options(), key: `opacity-${opacity}` };
+  };
+  setup.controller.prepare(opacityOptions(100));
+  for (let opacity = 99; opacity >= 25; opacity -= 1) setup.controller.prepare(opacityOptions(opacity));
+  expect(setup.controller.state()).toMatchObject({ pending: false, drawing: false, preparing: true });
+  expect(callCount).toBe(1);
+
+  first.resolve({ bitmaps: obsolete }); await microtasks();
+  expect(callCount).toBe(2);
+  expect(setup.calls[1].args.doc.layers[0].opacity).toBe(25);
+  obsolete.forEach(bitmap => expect(bitmap.close).toHaveBeenCalledTimes(1));
+  expect(contexts.has(setup.canvas)).toBe(false);
+
+  second.resolve({ bitmaps: latest }); await microtasks(); paintFrame();
+  const draws = contexts.get(setup.canvas).operations.filter(([type]) => type === 'drawImage').slice(-3);
+  expect(draws.map(entry => entry[1])).toEqual([1, 0.25, 1]);
+  expect(setup.controller.state()).toMatchObject({ pending: false, preparing: false });
+  expect(setup.onCommit).not.toHaveBeenCalled();
+  expect(setup.onError).not.toHaveBeenCalled();
   setup.controller.dispose();
 });
 

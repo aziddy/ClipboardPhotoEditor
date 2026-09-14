@@ -196,29 +196,13 @@ const resizeCrop = (originCrop, mode, dx, dy, doc) => {
   return cropFromEdges(left, top, right, bottom, doc);
 };
 
-const drawCropOverlay = (ctx, doc, crop) => {
-  if (!crop) return;
+const CropOverlay = ({ doc, crop, viewport }) => {
+  if (!crop) return null;
 
   const lineWidth = Math.max(2, Math.round(Math.min(doc.width, doc.height) / 500));
   const handleSize = Math.max(8, Math.round(Math.min(doc.width, doc.height) / 70));
   const right = crop.x + crop.width;
   const bottom = crop.y + crop.height;
-
-  ctx.save();
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.46)';
-  ctx.fillRect(0, 0, doc.width, crop.y);
-  ctx.fillRect(0, bottom, doc.width, doc.height - bottom);
-  ctx.fillRect(0, crop.y, crop.x, crop.height);
-  ctx.fillRect(right, crop.y, doc.width - right, crop.height);
-
-  ctx.strokeStyle = '#0f172a';
-  ctx.lineWidth = lineWidth * 2;
-  ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
-  ctx.setLineDash([lineWidth * 4, lineWidth * 3]);
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = lineWidth;
-  ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
-  ctx.setLineDash([]);
 
   const handles = [
     [crop.x, crop.y],
@@ -231,14 +215,31 @@ const drawCropOverlay = (ctx, doc, crop) => {
     [right, crop.y + crop.height / 2],
   ];
 
-  ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = '#0f172a';
-  handles.forEach(([x, y]) => {
-    ctx.fillRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize);
-    ctx.strokeRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize);
-  });
-
-  ctx.restore();
+  // Keep the crop controls separate from image pixels: dragging them does not
+  // change the document and should not request a new worker raster frame.
+  return (
+    <svg
+      aria-hidden="true"
+      data-editor-crop-overlay="true"
+      viewBox={`0 0 ${doc.width} ${doc.height}`}
+      preserveAspectRatio="none"
+      style={{ position: 'absolute', left: viewport.x, top: viewport.y, width: viewport.width, height: viewport.height, overflow: 'visible', pointerEvents: 'none' }}
+    >
+      <g fill="rgba(15, 23, 42, 0.46)">
+        <rect width={doc.width} height={crop.y} />
+        <rect y={bottom} width={doc.width} height={doc.height - bottom} />
+        <rect y={crop.y} width={crop.x} height={crop.height} />
+        <rect x={right} y={crop.y} width={doc.width - right} height={crop.height} />
+      </g>
+      <rect x={crop.x} y={crop.y} width={crop.width} height={crop.height} fill="none" stroke="#0f172a" strokeWidth={lineWidth * 2} />
+      <rect x={crop.x} y={crop.y} width={crop.width} height={crop.height} fill="none" stroke="#ffffff" strokeWidth={lineWidth} strokeDasharray={`${lineWidth * 4} ${lineWidth * 3}`} />
+      <g fill="#ffffff" stroke="#0f172a" strokeWidth={lineWidth}>
+        {handles.map(([x, y], index) => (
+          <rect key={index} x={x - handleSize / 2} y={y - handleSize / 2} width={handleSize} height={handleSize} />
+        ))}
+      </g>
+    </svg>
+  );
 };
 
 const getTranslationDraft = (draft) => ({
@@ -963,7 +964,6 @@ function UnifiedPhotoEditor() {
       ctx.save(); ctx.setTransform(...matrix);
       if (isGroupMove) drawLayerGroupBounds(ctx, selectedMoveLayers, draft, renderDoc);
       else if (activeTool === TOOLS.MOVE && activeLayer) drawLayerBounds(ctx, activeLayer, draft, renderDoc);
-      if (activeTool === TOOLS.CROP) drawCropOverlay(ctx, renderDoc, crop);
       ctx.restore();
     } };
     if (queue.running) return;
@@ -989,7 +989,7 @@ function UnifiedPhotoEditor() {
       } finally { queue.running = false; }
     };
     drain();
-  }, [activeLayer, activeTool, crop, displayHeight, displayWidth, doc, documentVisualSignature, hasMultiLayerSelection, isSpacePanning, selectedMoveLayers, toast, transformDraft, viewportSize, viewOffset, viewZoom]);
+  }, [activeLayer, activeTool, displayHeight, displayWidth, doc, documentVisualSignature, hasMultiLayerSelection, isSpacePanning, selectedMoveLayers, toast, transformDraft, viewportSize, viewOffset, viewZoom]);
 
   useEffect(() => { renderDisplay(); }, [displayRevision, renderDisplay]);
 
@@ -1161,19 +1161,27 @@ function UnifiedPhotoEditor() {
     handleFiles(event.dataTransfer.files);
   }, [handleFiles]);
 
-  const updateLayerMeta = useCallback((layerId, changes, saveToHistory = true) => runAfterDrawing(() => {
-    const currentDoc = docRef.current;
-    const nextDoc = updateLayer(currentDoc, layerId, (layer) => ({
-      ...layer,
-      ...changes,
-    }));
+  const updateLayerMeta = useCallback((layerId, changes, saveToHistory = true) => {
+    if (busyRef.current) return;
+    const applyChanges = () => {
+      const currentDoc = docRef.current;
+      const nextDoc = updateLayer(currentDoc, layerId, (layer) => ({
+        ...layer,
+        ...changes,
+      }));
 
-    if (saveToHistory) {
-      commitDocument(nextDoc);
-    } else {
-      setDocumentTransient(nextDoc);
-    }
-  }), [commitDocument, runAfterDrawing, setDocumentTransient]);
+      if (saveToHistory) {
+        commitDocument(nextDoc);
+      } else {
+        setDocumentTransient(nextDoc);
+      }
+    };
+    const drawing = liveDrawingRef.current?.state();
+    if (drawing?.pending || drawing?.drawing) return runAfterDrawing(applyChanges);
+    // Keep an in-flight preview alive so the drawing controller can coalesce
+    // rapid opacity/visibility changes into its latest requested document.
+    return applyChanges();
+  }, [commitDocument, runAfterDrawing, setDocumentTransient]);
 
   const addBlankLayer = useCallback(() => runPixelOperation('Could not add layer', async (client, isCurrent) => {
     const currentDoc = docRef.current;
@@ -2265,6 +2273,7 @@ function UnifiedPhotoEditor() {
                   onPointerCancel={handlePointerUp}
                   style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', cursor: toolCursor, touchAction: 'none' }}
                 />
+                {activeTool === TOOLS.CROP && <CropOverlay doc={doc} crop={crop} viewport={viewport} />}
 
                 {ocrWords.length > 0 && (
                   <Box

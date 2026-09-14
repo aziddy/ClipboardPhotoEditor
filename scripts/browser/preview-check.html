@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Preview performance and accuracy check</title>
+    <style>
+      body { margin: 24px; font: 15px system-ui, sans-serif; color: #17202a; background: #f5f7fa; }
+      h1 { font-size: 22px; }
+      canvas { display: block; max-width: 100%; height: auto; border: 1px solid #b6c1ce; background: repeating-conic-gradient(#eee 0% 25%, white 0% 50%) 0 / 16px 16px; }
+      pre { padding: 16px; overflow: auto; background: white; border: 1px solid #d6dde5; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Preview performance and accuracy check</h1>
+    <p>Compares the same engine with its preview cache disabled and enabled, including three independent 4000×3000 images at two viewport sizes. Timing covers worker rendering, bitmap delivery, and canvas presentation calls. Pixel readback and export checks run separately.</p>
+    <p>Keep this tab visible while it runs. Frames follow the browser animation rate; waiting for the next frame is excluded from the measured duration. Hidden-tab runs are marked invalid for timing.</p>
+    <canvas id="preview" width="1000" height="750" aria-label="Current benchmark preview"></canvas>
+    <pre id="status">Starting…</pre>
+    <script type="module" src="/preview-check.js"></script>
+  </body>
+</html>

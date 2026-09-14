@@ -10,7 +10,7 @@ const resultsDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'clipboard-browse
 const baselineRevision = process.env.RASTER_BASELINE_REVISION || '194c6a4ea01af99e2ad3eacec5a4242c8ae68970';
 const port = Number(process.env.BROWSER_TEST_PORT || 4176);
 const buildDirectory = path.resolve(process.env.BROWSER_TEST_BUILD || path.join(root, 'build'));
-const assets = new Set(['engine-check.html', 'engine-check.js', 'ram-check.html', 'ram-check.js', 'ui-check.js', 'latency-check.js']);
+const assets = new Set(['engine-check.html', 'engine-check.js', 'ram-check.html', 'ram-check.js', 'ui-check.js', 'latency-check.js', 'preview-check.html', 'preview-check.js']);
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
 
 http.createServer(async (request, response) => {
@@ -69,6 +69,7 @@ http.createServer(async (request, response) => {
   console.log(`Editor checks: http://localhost:${port}/?uicheck=all`);
   console.log(`OCR fixture: http://localhost:${port}/?uicheck=ocr`);
   console.log(`RAM workload: http://localhost:${port}/ram-check.html?mode=tiled (or baseline)`);
+  console.log(`Preview comparison: http://localhost:${port}/preview-check.html`);
   console.log(`Drawing latency: http://localhost:${port}/?latencycheck=normal (or stress; optional &delayms=250&case=continuous)`);
   console.log('Latency checks require a visible, focused window: click the Ready button, or use &autostart=1 in a foreground window.');
   console.log(`Results: ${resultsDirectory}`);
