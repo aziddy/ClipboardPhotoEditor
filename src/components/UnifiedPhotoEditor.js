@@ -60,6 +60,7 @@ import {
 } from 'lucide-react';
 import { useImageExportControls } from '../utils/useImageExportControls';
 import { createRasterClient } from '../utils/rasterClient';
+import { createLiveDrawing } from '../utils/liveDrawing';
 import { importRasterBlob } from '../utils/rasterImport';
 import { getEditorViewport } from '../utils/editorViewport';
 import { useBrowserOcr } from '../utils/useBrowserOcr';
@@ -465,6 +466,8 @@ const areLayerIdListsEqual = (first, second) => (
   first.length === second.length && first.every((layerId, index) => layerId === second[index])
 );
 
+const getDocumentVisualSignature = (doc) => `${doc.width}x${doc.height}|${doc.layers.map((layer) => [layer.id, layer.rasterId, ...layer.transform, layer.visible, layer.opacity].join(':')).join('|')}`;
+
 const reorderLayer = (doc, draggedLayerId, targetLayerId, placement) => {
   if (!draggedLayerId || !targetLayerId || draggedLayerId === targetLayerId) return doc;
 
@@ -511,7 +514,7 @@ const ToolButton = ({ icon: Icon, label, isActive, onClick, isDisabled = false }
   </Tooltip>
 );
 
-const LayerThumbnail = ({ layer, client }) => {
+const LayerThumbnail = ({ layer, client, suspended }) => {
   const canvasRef = useRef(null);
   const queueRef = useRef({ running: false, latest: null, generation: 0 });
   useEffect(() => {
@@ -519,7 +522,7 @@ const LayerThumbnail = ({ layer, client }) => {
     const generation = ++queue.generation;
     const bounds = getLayerDocumentBounds(layer);
     const canvas = canvasRef.current;
-    if (!bounds || !canvas) return undefined;
+    if (suspended || !bounds || !canvas) return undefined;
     const scale = Math.min(64 / bounds.width, 44 / bounds.height);
     const thumbnailDoc = {
       width: Math.ceil(bounds.width), height: Math.ceil(bounds.height),
@@ -551,7 +554,7 @@ const LayerThumbnail = ({ layer, client }) => {
     };
     drain();
     return () => { queue.generation += 1; queue.latest = null; canvas.width = 64; };
-  }, [layer, client]);
+  }, [layer, client, suspended]);
   return <canvas ref={canvasRef} width={64} height={44} style={{ width: '64px', height: '44px', border: '1px solid #cbd5e1', background: '#f8fafc' }} />;
 };
 
@@ -575,6 +578,9 @@ function UnifiedPhotoEditor() {
   const jobQueueRef = useRef(Promise.resolve());
   const queuedJobsRef = useRef(0);
   const renderQueueRef = useRef({ running: false, latest: null, generation: 0 });
+  const liveDrawingRef = useRef(null);
+  const [drawingState, setDrawingState] = useState({ pending: false, preparing: false, paused: false, queuedStrokes: 0 });
+  const [displayRevision, invalidateDisplay] = useReducer((value) => value + 1, 0);
   const [isBusy, setIsBusy] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 800, height: 600 });
 
@@ -603,21 +609,12 @@ function UnifiedPhotoEditor() {
       editorEpochRef.current += 1;
       interactionRef.current?.resolveDone?.();
       interactionRef.current = null;
+      liveDrawingRef.current?.reset();
       renderQueue.generation += 1;
       renderQueue.latest = null;
       rasterClientRef.current.dispose().catch(() => {});
     };
   }, [createClient]);
-
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return undefined;
-    const observer = new ResizeObserver(() => {
-      setViewportSize({ width: viewport.clientWidth, height: viewport.clientHeight });
-    });
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     if (!history.length && !doc.layers.length) return;
@@ -628,7 +625,7 @@ function UnifiedPhotoEditor() {
     }).catch((error) => { if (error.name !== 'AbortError') console.error(error); });
   }, [doc, history, historyIndex]);
 
-  const runPixelOperation = useCallback((label, operation) => {
+  const runPixelOperation = useCallback((label, operation, { rethrow = false } = {}) => {
     // Keep at most one waiting import alongside the active operation. Clipboard
     // Blobs can own substantial memory even before the worker decodes them.
     if (queuedJobsRef.current >= 2) {
@@ -636,26 +633,57 @@ function UnifiedPhotoEditor() {
       return Promise.resolve();
     }
     queuedJobsRef.current += 1;
+    busyRef.current = true; setIsBusy(true);
     const epoch = editorEpochRef.current;
     const client = rasterClientRef.current;
-    const strokeDone = interactionRef.current?.type === 'stroke' ? interactionRef.current.done : Promise.resolve();
+    if (interactionRef.current?.type === 'stroke') interactionRef.current = null;
+    // Capture rejection immediately even when another pixel job precedes us.
+    const strokeDone = (liveDrawingRef.current?.flush() || Promise.resolve()).then(() => null, (error) => error);
     const result = jobQueueRef.current.then(async () => {
-      await strokeDone;
-      if (epoch !== editorEpochRef.current) return;
-      busyRef.current = true; setIsBusy(true);
-      try { return await operation(client, () => epoch === editorEpochRef.current); }
+      try {
+        const drawingError = await strokeDone;
+        if (epoch !== editorEpochRef.current) return;
+        if (drawingError) throw drawingError;
+        liveDrawingRef.current?.releasePreview();
+        return await operation(client, () => epoch === editorEpochRef.current);
+      }
       catch (error) {
         if (epoch === editorEpochRef.current && error.name !== 'AbortError') toast({ title: label, description: error.message, status: 'error', duration: 4500 });
+        if (rethrow) throw error;
       } finally {
         if (epoch === editorEpochRef.current) {
           queuedJobsRef.current -= 1;
-          busyRef.current = false; setIsBusy(false);
+          busyRef.current = queuedJobsRef.current > 0; setIsBusy(busyRef.current);
+          invalidateDisplay();
         }
       }
     });
     jobQueueRef.current = result.catch(() => {});
     return result;
   }, [toast]);
+
+  // Metadata/view actions stay synchronous when idle. If drawing is still being
+  // persisted, freeze new input and apply the action to the acknowledged document.
+  const runAfterDrawing = useCallback((operation) => {
+    if (busyRef.current) return;
+    if (!liveDrawingRef.current?.hasWork()) {
+      liveDrawingRef.current?.releasePreview();
+      return operation();
+    }
+    return runPixelOperation('Could not complete edit', async () => operation());
+  }, [runPixelOperation]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return undefined;
+    const observer = new ResizeObserver(() => {
+      const measure = () => setViewportSize({ width: viewport.clientWidth, height: viewport.clientHeight });
+      if (liveDrawingRef.current?.hasWork()) runPixelOperation('Could not update view', measure);
+      else measure();
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [runPixelOperation]);
 
   const [activeTool, setActiveTool] = useState(TOOLS.MOVE);
   const [brushColor, setBrushColor] = useState(DEFAULT_BRUSH_COLOR);
@@ -667,6 +695,7 @@ function UnifiedPhotoEditor() {
   const [viewZoom, setViewZoom] = useState(VIEW_ZOOM_DEFAULT);
   const [viewOffset, setViewOffset] = useState(createDefaultViewOffset);
   const [isSpacePanning, setIsSpacePanning] = useState(false);
+  const spaceHeldRef = useRef(false);
   const [isViewDragging, setIsViewDragging] = useState(false);
   const [draggedLayerId, setDraggedLayerId] = useState(null);
   const [layerDropTarget, setLayerDropTarget] = useState(null);
@@ -679,7 +708,7 @@ function UnifiedPhotoEditor() {
     doc.layers.filter((layer) => selectedLayerIdSet.has(layer.id))
   ), [doc.layers, selectedLayerIdSet]);
   const hasMultiLayerSelection = selectedMoveLayers.length > 1;
-  const canUndo = historyIndex > 0;
+  const canUndo = historyIndex > 0 || drawingState.pending;
   const canRedo = historyIndex >= 0 && historyIndex < history.length - 1;
   const documentWidth = doc.width;
   const documentHeight = doc.height;
@@ -689,7 +718,7 @@ function UnifiedPhotoEditor() {
   );
   const displayWidth = isResizePreview ? clampDimension(resizeDraft.width) : doc.width;
   const displayHeight = isResizePreview ? clampDimension(resizeDraft.height) : doc.height;
-  const documentVisualSignature = useMemo(() => `${doc.width}x${doc.height}|${doc.layers.map((layer) => [layer.id, layer.rasterId, ...layer.transform, layer.visible, layer.opacity].join(':')).join('|')}`, [doc]);
+  const documentVisualSignature = useMemo(() => getDocumentVisualSignature(doc), [doc]);
   const viewport = getEditorViewport(
     { width: displayWidth, height: displayHeight }, viewportSize.width, viewportSize.height,
     viewZoom, viewOffset, window.devicePixelRatio || 1
@@ -743,6 +772,22 @@ function UnifiedPhotoEditor() {
     docRef.current = nextDoc;
     dispatch({ type: 'commit', doc: nextDoc });
   }, []);
+
+  if (!liveDrawingRef.current) {
+    liveDrawingRef.current = createLiveDrawing({
+      getClient: () => rasterClientRef.current,
+      getDocument: () => docRef.current,
+      onCommit: commitDocument,
+      onStateChange: setDrawingState,
+      onInvalidate: invalidateDisplay,
+      onError: (error, revertedStrokeCount) => {
+        interactionRef.current = null;
+        toast({ title: revertedStrokeCount ? 'Drawing could not be saved' : 'Could not prepare drawing',
+          description: revertedStrokeCount ? `${revertedStrokeCount} unsaved stroke${revertedStrokeCount === 1 ? '' : 's'} reverted. ${error.message}` : error.message,
+          status: 'error', duration: 6000 });
+      },
+    });
+  }
 
   const setDocumentTransient = useCallback((nextDoc) => {
     docRef.current = nextDoc;
@@ -818,21 +863,23 @@ function UnifiedPhotoEditor() {
   }, []);
 
   const zoomIn = useCallback(() => {
-    updateViewZoom(viewZoomRef.current + VIEW_ZOOM_STEP);
-  }, [updateViewZoom]);
+    runAfterDrawing(() => updateViewZoom(viewZoomRef.current + VIEW_ZOOM_STEP));
+  }, [runAfterDrawing, updateViewZoom]);
 
   const zoomOut = useCallback(() => {
-    updateViewZoom(viewZoomRef.current - VIEW_ZOOM_STEP);
-  }, [updateViewZoom]);
+    runAfterDrawing(() => updateViewZoom(viewZoomRef.current - VIEW_ZOOM_STEP));
+  }, [runAfterDrawing, updateViewZoom]);
 
   const exportProvider = useMemo(() => ({
     revision: documentVisualSignature,
-    exportBlob: async (format, quality) => {
-      if (!hasDocument(doc)) return null;
-      if (busyRef.current) throw new Error('Wait for the current image operation to finish.');
-      return rasterClientRef.current.call('exportBlob', { doc, format, quality });
-    },
-  }), [doc, documentVisualSignature]);
+    getRevision: () => getDocumentVisualSignature(docRef.current),
+    exportBlob: (format, quality) => runPixelOperation('Could not export image', async (client, isCurrent) => {
+      if (!isCurrent() || !hasDocument(docRef.current)) return null;
+      const sourceDoc = docRef.current;
+      const blob = await client.call('exportBlob', { doc: sourceDoc, format, quality });
+      return { blob, revision: getDocumentVisualSignature(sourceDoc) };
+    }, { rethrow: true }),
+  }), [documentVisualSignature, runPixelOperation]);
   const { resetExportState, ExportControls } = useImageExportControls(exportProvider, toast, 'edited', { automaticSizeUpdates: false });
   const {
     ocrText,
@@ -868,19 +915,27 @@ function UnifiedPhotoEditor() {
     clearOcr();
   }, [cancelOcr, clearOcr, documentVisualSignature]);
 
-  const undoDocument = useCallback(() => {
-    if (busyRef.current) return;
+  const undoDocument = useCallback(() => runAfterDrawing(() => {
     interactionRef.current = null;
     resetTransformDraft();
     dispatch({ type: 'undo' });
-  }, [resetTransformDraft]);
+  }), [resetTransformDraft, runAfterDrawing]);
 
-  const redoDocument = useCallback(() => {
-    if (busyRef.current) return;
+  const redoDocument = useCallback(() => runAfterDrawing(() => {
     interactionRef.current = null;
     resetTransformDraft();
     dispatch({ type: 'redo' });
-  }, [resetTransformDraft]);
+  }), [resetTransformDraft, runAfterDrawing]);
+
+  const chooseTool = useCallback((nextTool) => {
+    const isDrawingTool = (tool) => tool === TOOLS.BRUSH || tool === TOOLS.ERASER;
+    if (isDrawingTool(nextTool)) { cancelOcr(); clearOcr(); }
+    if (isDrawingTool(activeTool) && isDrawingTool(nextTool)) {
+      setActiveTool(nextTool);
+    } else {
+      runAfterDrawing(() => setActiveTool(nextTool));
+    }
+  }, [activeTool, cancelOcr, clearOcr, runAfterDrawing]);
 
   const renderDisplay = useCallback((renderDoc = doc) => {
     const canvas = displayCanvasRef.current;
@@ -894,6 +949,16 @@ function UnifiedPhotoEditor() {
     const queue = renderQueueRef.current;
     const generation = ++queue.generation;
     const epoch = editorEpochRef.current;
+    if ((activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) && !isSpacePanning && !busyRef.current) {
+      queue.latest = null;
+      liveDrawingRef.current.prepare({ doc: renderDoc, activeLayerId: renderDoc.activeLayerId,
+        width: view.pixelWidth, height: view.pixelHeight, view: matrix,
+        key: `${documentVisualSignature}|${renderDoc.activeLayerId}|${view.pixelWidth}x${view.pixelHeight}|${matrix.join(',')}`,
+        canvas,
+      });
+      return;
+    }
+    if (liveDrawingRef.current.ownsDisplay()) return;
     queue.latest = { drawingDoc, matrix, view, generation, epoch, client: rasterClientRef.current, drawOverlay: (ctx) => {
       ctx.save(); ctx.setTransform(...matrix);
       if (isGroupMove) drawLayerGroupBounds(ctx, selectedMoveLayers, draft, renderDoc);
@@ -910,7 +975,7 @@ function UnifiedPhotoEditor() {
           try {
             const { bitmap } = await request.client.call('render', { doc: request.drawingDoc, width: request.view.pixelWidth, height: request.view.pixelHeight, view: request.matrix });
             try {
-              if (request.epoch !== editorEpochRef.current || request.generation !== queue.generation) continue;
+              if (request.epoch !== editorEpochRef.current || liveDrawingRef.current.ownsDisplay()) continue;
               if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
               if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
               const ctx = canvas.getContext('2d');
@@ -924,9 +989,9 @@ function UnifiedPhotoEditor() {
       } finally { queue.running = false; }
     };
     drain();
-  }, [activeLayer, activeTool, crop, displayHeight, displayWidth, doc, hasMultiLayerSelection, selectedMoveLayers, toast, transformDraft, viewportSize, viewOffset, viewZoom]);
+  }, [activeLayer, activeTool, crop, displayHeight, displayWidth, doc, documentVisualSignature, hasMultiLayerSelection, isSpacePanning, selectedMoveLayers, toast, transformDraft, viewportSize, viewOffset, viewZoom]);
 
-  useEffect(() => { renderDisplay(); }, [renderDisplay]);
+  useEffect(() => { renderDisplay(); }, [displayRevision, renderDisplay]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -951,12 +1016,12 @@ function UnifiedPhotoEditor() {
       if (!nextTool || !hasDocument(docRef.current)) return;
 
       event.preventDefault();
-      setActiveTool(nextTool);
+      chooseTool(nextTool);
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [redoDocument, undoDocument]);
+  }, [chooseTool, redoDocument, undoDocument]);
 
   useEffect(() => {
     const isSpaceKey = (event) => event.code === 'Space' || event.key === ' ';
@@ -967,17 +1032,24 @@ function UnifiedPhotoEditor() {
       if (!hasDocument(docRef.current)) return;
 
       event.preventDefault();
-      if (!event.repeat) setIsSpacePanning(true);
+      spaceHeldRef.current = true;
+      if (!event.repeat) runAfterDrawing(() => setIsSpacePanning(spaceHeldRef.current));
     };
 
     const handleSpaceKeyUp = (event) => {
       if (!isSpaceKey(event)) return;
 
       event.preventDefault();
+      spaceHeldRef.current = false;
       setIsSpacePanning(false);
     };
 
     const handleWindowBlur = () => {
+      spaceHeldRef.current = false;
+      if (interactionRef.current?.type === 'stroke' || liveDrawingRef.current?.state().paused) {
+        interactionRef.current = null;
+        liveDrawingRef.current?.end();
+      }
       setIsSpacePanning(false);
     };
 
@@ -989,7 +1061,7 @@ function UnifiedPhotoEditor() {
       window.removeEventListener('keyup', handleSpaceKeyUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, []);
+  }, [runAfterDrawing]);
 
   useEffect(() => {
     const documentExists = documentWidth > 0 && documentHeight > 0 && documentLayerCount > 0;
@@ -1002,12 +1074,12 @@ function UnifiedPhotoEditor() {
   }, [documentHeight, documentLayerCount, documentWidth, resetView]);
 
   useEffect(() => {
-    const clampOffsetToViewport = () => updateViewOffset((current) => current);
+    const clampOffsetToViewport = () => runAfterDrawing(() => updateViewOffset((current) => current));
 
     clampOffsetToViewport();
     window.addEventListener('resize', clampOffsetToViewport);
     return () => window.removeEventListener('resize', clampOffsetToViewport);
-  }, [displayHeight, displayWidth, updateViewOffset]);
+  }, [displayHeight, displayWidth, runAfterDrawing, updateViewOffset]);
 
   useEffect(() => {
     if (documentWidth <= 0 || documentHeight <= 0 || documentLayerCount === 0) {
@@ -1089,7 +1161,7 @@ function UnifiedPhotoEditor() {
     handleFiles(event.dataTransfer.files);
   }, [handleFiles]);
 
-  const updateLayerMeta = useCallback((layerId, changes, saveToHistory = true) => {
+  const updateLayerMeta = useCallback((layerId, changes, saveToHistory = true) => runAfterDrawing(() => {
     const currentDoc = docRef.current;
     const nextDoc = updateLayer(currentDoc, layerId, (layer) => ({
       ...layer,
@@ -1101,7 +1173,7 @@ function UnifiedPhotoEditor() {
     } else {
       setDocumentTransient(nextDoc);
     }
-  }, [commitDocument, setDocumentTransient]);
+  }), [commitDocument, runAfterDrawing, setDocumentTransient]);
 
   const addBlankLayer = useCallback(() => runPixelOperation('Could not add layer', async (client, isCurrent) => {
     const currentDoc = docRef.current;
@@ -1113,7 +1185,7 @@ function UnifiedPhotoEditor() {
     updateSelectedLayerIds([layer.id]);
   }), [commitDocument, runPixelOperation, updateSelectedLayerIds]);
 
-  const duplicateActiveLayer = useCallback(() => {
+  const duplicateActiveLayer = useCallback(() => runAfterDrawing(() => {
     const currentDoc = docRef.current;
     const layer = getActiveLayer(currentDoc);
     if (!layer) return;
@@ -1132,9 +1204,9 @@ function UnifiedPhotoEditor() {
       activeLayerId: duplicate.id,
     });
     updateSelectedLayerIds([duplicate.id]);
-  }, [commitDocument, updateSelectedLayerIds]);
+  }), [commitDocument, runAfterDrawing, updateSelectedLayerIds]);
 
-  const deleteActiveLayer = useCallback(() => {
+  const deleteActiveLayer = useCallback(() => runAfterDrawing(() => {
     const currentDoc = docRef.current;
     const layer = getActiveLayer(currentDoc);
     if (!layer) return;
@@ -1155,9 +1227,9 @@ function UnifiedPhotoEditor() {
       activeLayerId: fallbackLayer.id,
     });
     updateSelectedLayerIds([fallbackLayer.id]);
-  }, [commitDocument, updateSelectedLayerIds]);
+  }), [commitDocument, runAfterDrawing, updateSelectedLayerIds]);
 
-  const moveActiveLayer = useCallback((direction) => {
+  const moveActiveLayer = useCallback((direction) => runAfterDrawing(() => {
     const currentDoc = docRef.current;
     const index = currentDoc.layers.findIndex((layer) => layer.id === currentDoc.activeLayerId);
     if (index === -1) return;
@@ -1172,7 +1244,7 @@ function UnifiedPhotoEditor() {
       ...currentDoc,
       layers,
     });
-  }, [commitDocument]);
+  }), [commitDocument, runAfterDrawing]);
 
   const getCanvasPoint = useCallback((event, shouldClamp = true) => {
     const canvas = displayCanvasRef.current;
@@ -1196,40 +1268,6 @@ function UnifiedPhotoEditor() {
     };
   }, []);
 
-  const drainStroke = useCallback(async (stroke) => {
-    if (stroke.processing) return;
-    stroke.processing = true;
-    try {
-      let source = await stroke.started;
-      if (stroke.epoch !== editorEpochRef.current) return;
-      while (true) {
-        if (stroke.points.length) source = await stroke.client.call('strokePoints', { points: stroke.points.splice(0, 128) });
-        if (stroke.epoch !== editorEpochRef.current) return;
-        const currentSource = source;
-        const nextDoc = updateLayer(stroke.baseDoc, stroke.layerId, (layer) => ({ ...layer, ...currentSource }));
-        setDocumentTransient(nextDoc);
-        if (stroke.points.length) continue;
-        if (stroke.ended) {
-          await stroke.client.call('finishStroke');
-          if (stroke.epoch !== editorEpochRef.current) return;
-          interactionRef.current = null;
-          commitDocument(nextDoc);
-          busyRef.current = false; setIsBusy(false); stroke.resolveDone();
-        }
-        break;
-      }
-    } catch (error) {
-      await stroke.client.call('abortStroke').catch(() => {});
-      if (stroke.epoch === editorEpochRef.current) {
-        interactionRef.current = null;
-        setDocumentTransient(stroke.baseDoc);
-        busyRef.current = false; setIsBusy(false);
-        if (error.name !== 'AbortError') toast({ title: 'Could not finish stroke', description: error.message, status: 'error' });
-      }
-      stroke.resolveDone();
-    } finally { stroke.processing = false; }
-  }, [commitDocument, setDocumentTransient, toast]);
-
   const startStroke = useCallback((event) => {
     if (busyRef.current) return;
     const currentDoc = docRef.current;
@@ -1237,33 +1275,27 @@ function UnifiedPhotoEditor() {
     const point = getCanvasPoint(event, false);
     if (!layer || !point || point.x < 0 || point.y < 0 || point.x > currentDoc.width || point.y > currentDoc.height) return;
     if (!layer.visible) { toast({ title: 'Layer hidden', description: 'Make the active layer visible before drawing on it.', status: 'info' }); return; }
-    const client = rasterClientRef.current;
-    let resolveDone;
-    const done = new Promise((resolve) => { resolveDone = resolve; });
-    const stroke = {
-      type: 'stroke', layerId: layer.id, pointerId: event.pointerId, baseDoc: currentDoc,
-      epoch: editorEpochRef.current, client, points: [], ended: false, processing: false, done, resolveDone,
-      started: client.call('beginStroke', { layer, point, size: brushSize, color: brushColor, erase: activeTool === TOOLS.ERASER }),
-    };
-    interactionRef.current = stroke;
-    busyRef.current = true; setIsBusy(true);
-    drainStroke(stroke);
-  }, [activeTool, brushColor, brushSize, drainStroke, getCanvasPoint, toast]);
+    if (liveDrawingRef.current.begin({ layerId: layer.id, point, size: brushSize, color: brushColor,
+      erase: activeTool === TOOLS.ERASER, pointerId: event.pointerId })) {
+      interactionRef.current = { type: 'stroke', pointerId: event.pointerId };
+      cancelOcr(); clearOcr();
+    }
+  }, [activeTool, brushColor, brushSize, cancelOcr, clearOcr, getCanvasPoint, toast]);
 
   const continueStroke = useCallback((event) => {
     const stroke = interactionRef.current;
-    if (!stroke || stroke.type !== 'stroke' || stroke.ended || stroke.pointerId !== event.pointerId) return;
+    if (!stroke || stroke.type !== 'stroke' || stroke.pointerId !== event.pointerId) return;
     const coalesced = event.nativeEvent?.getCoalescedEvents?.();
     const events = coalesced?.length ? coalesced : [event];
-    events.forEach((sample) => { const point = getCanvasPoint(sample); if (point) stroke.points.push(point); });
-    drainStroke(stroke);
-  }, [drainStroke, getCanvasPoint]);
+    liveDrawingRef.current.move(events.map((sample) => getCanvasPoint(sample)).filter(Boolean));
+  }, [getCanvasPoint]);
 
   const finishStroke = useCallback(() => {
     const stroke = interactionRef.current;
     if (!stroke || stroke.type !== 'stroke') return;
-    stroke.ended = true; drainStroke(stroke);
-  }, [drainStroke]);
+    interactionRef.current = null;
+    liveDrawingRef.current.end();
+  }, []);
 
   const startCropInteraction = useCallback((event) => {
     const currentDoc = docRef.current;
@@ -1430,7 +1462,7 @@ function UnifiedPhotoEditor() {
     setTransformDraft(nextDraft);
   }, [getCanvasPoint]);
 
-  const applyActiveTransform = useCallback((draft = transformDraftRef.current) => {
+  const applyActiveTransform = useCallback((draft = transformDraftRef.current) => runAfterDrawing(() => {
     const currentDoc = docRef.current;
     const selectedLayerIdSetForMove = new Set(selectedLayerIdsRef.current);
     const selectedLayersForMove = currentDoc.layers.filter((candidate) => (
@@ -1471,7 +1503,7 @@ function UnifiedPhotoEditor() {
 
     resetTransformDraft();
     commitDocument(nextDoc);
-  }, [commitDocument, resetTransformDraft]);
+  }), [commitDocument, resetTransformDraft, runAfterDrawing]);
 
   const finishMoveInteraction = useCallback(() => {
     if (interactionRef.current?.type !== 'move') return;
@@ -1509,7 +1541,7 @@ function UnifiedPhotoEditor() {
   }, []);
 
   const handlePointerDown = useCallback((event) => {
-    if (!hasDocument(docRef.current)) return;
+    if (!hasDocument(docRef.current) || busyRef.current || interactionRef.current) return;
 
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -1562,11 +1594,16 @@ function UnifiedPhotoEditor() {
 
   const handlePointerUp = useCallback((event) => {
     const interaction = interactionRef.current;
-    if (!interaction || interaction.pointerId !== event.pointerId) return;
+    if (!interaction) {
+      if (liveDrawingRef.current.state().paused) liveDrawingRef.current.end();
+      return;
+    }
+    if (interaction.pointerId !== event.pointerId) return;
 
     event.preventDefault();
 
     if (interaction.type === 'stroke') {
+      if (event.type !== 'pointercancel') continueStroke(event);
       finishStroke();
       return;
     }
@@ -1584,7 +1621,7 @@ function UnifiedPhotoEditor() {
     if (interaction.type === 'pan') {
       finishPanInteraction();
     }
-  }, [finishCropInteraction, finishMoveInteraction, finishPanInteraction, finishStroke]);
+  }, [continueStroke, finishCropInteraction, finishMoveInteraction, finishPanInteraction, finishStroke]);
 
   const applyCrop = useCallback(() => runPixelOperation('Could not crop image', async (client, isCurrent) => {
     const currentDoc = docRef.current;
@@ -1596,14 +1633,14 @@ function UnifiedPhotoEditor() {
     setCrop(null); setActiveTool(TOOLS.MOVE); commitDocument(nextDoc);
   }), [commitDocument, runPixelOperation]);
 
-  const applyResize = useCallback(() => {
+  const applyResize = useCallback(() => runAfterDrawing(() => {
     const currentDoc = docRef.current;
     if (!hasDocument(currentDoc)) return;
 
     const nextDoc = resizeDocument(currentDoc, resizeDraft.width, resizeDraft.height);
     setActiveTool(TOOLS.MOVE);
     commitDocument(nextDoc);
-  }, [commitDocument, resizeDraft.height, resizeDraft.width]);
+  }), [commitDocument, resizeDraft.height, resizeDraft.width, runAfterDrawing]);
 
   const handleRunOcr = useCallback(async () => {
     if (!hasDocument(docRef.current) || busyRef.current) {
@@ -1619,10 +1656,13 @@ function UnifiedPhotoEditor() {
 
     try {
       const epoch = editorEpochRef.current;
-      const sourceDoc = docRef.current;
-      const input = await rasterClientRef.current.call('ocrInput', { doc: sourceDoc });
-      if (epoch !== editorEpochRef.current || sourceDoc !== docRef.current) return;
-      const text = await runOcr(input);
+      const prepared = await runPixelOperation('Could not prepare OCR', async (client) => {
+        const sourceDoc = docRef.current;
+        return { sourceDoc, input: await client.call('ocrInput', { doc: sourceDoc }) };
+      }, { rethrow: true });
+      if (!prepared || epoch !== editorEpochRef.current
+        || getDocumentVisualSignature(prepared.sourceDoc) !== getDocumentVisualSignature(docRef.current)) return;
+      const text = await runOcr(prepared.input);
       toast({
         title: text ? 'OCR complete' : 'No text found',
         description: text
@@ -1643,7 +1683,7 @@ function UnifiedPhotoEditor() {
         isClosable: true,
       });
     }
-  }, [runOcr, toast]);
+  }, [runOcr, runPixelOperation, toast]);
 
   const handleCopyOcrText = useCallback(async () => {
     const text = ocrText.trim();
@@ -1709,6 +1749,7 @@ function UnifiedPhotoEditor() {
 
   const resetEditor = useCallback(() => {
     editorEpochRef.current += 1;
+    liveDrawingRef.current.reset();
     if (displayCanvasRef.current) {
       displayCanvasRef.current.width = 1;
       displayCanvasRef.current.height = 1;
@@ -1771,15 +1812,15 @@ function UnifiedPhotoEditor() {
     });
   }, []);
 
-  const selectLayer = useCallback((layerId, options = {}) => {
+  const selectLayer = useCallback((layerId, options = {}) => runAfterDrawing(() => {
     const { replaceSelection = true } = options;
     dispatch({ type: 'selectLayer', layerId });
     if (replaceSelection) {
       updateSelectedLayerIds([layerId]);
     }
-  }, [updateSelectedLayerIds]);
+  }), [runAfterDrawing, updateSelectedLayerIds]);
 
-  const toggleLayerSelection = useCallback((layerId, isSelected) => {
+  const toggleLayerSelection = useCallback((layerId, isSelected) => runAfterDrawing(() => {
     const currentLayerIds = selectedLayerIdsRef.current;
     let nextLayerIds = isSelected
       ? getUniqueLayerIds([...currentLayerIds, layerId])
@@ -1799,7 +1840,7 @@ function UnifiedPhotoEditor() {
     if (docRef.current.activeLayerId === layerId) {
       dispatch({ type: 'selectLayer', layerId: nextLayerIds[0] });
     }
-  }, [updateSelectedLayerIds]);
+  }), [runAfterDrawing, updateSelectedLayerIds]);
 
   const handleLayerRowClick = useCallback((event, layerId) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey) {
@@ -1855,15 +1896,14 @@ function UnifiedPhotoEditor() {
     const placement = layerDropTarget?.layerId === targetLayerId
       ? layerDropTarget.placement
       : fallbackPlacement;
-    const currentDoc = docRef.current;
-    const nextDoc = reorderLayer(currentDoc, sourceLayerId, targetLayerId, placement);
-
     setDraggedLayerId(null);
     setLayerDropTarget(null);
-
-    if (nextDoc === currentDoc) return;
-    commitDocument(nextDoc);
-  }, [commitDocument, draggedLayerId, layerDropTarget]);
+    runAfterDrawing(() => {
+      const currentDoc = docRef.current;
+      const nextDoc = reorderLayer(currentDoc, sourceLayerId, targetLayerId, placement);
+      if (nextDoc !== currentDoc) commitDocument(nextDoc);
+    });
+  }, [commitDocument, draggedLayerId, layerDropTarget, runAfterDrawing]);
 
   const handleLayerDragEnd = useCallback(() => {
     setDraggedLayerId(null);
@@ -1975,6 +2015,9 @@ function UnifiedPhotoEditor() {
   const ocrSelectionRect = ocrDragSelection
     ? getSelectionRectFromPoints(ocrDragSelection.startPoint, ocrDragSelection.currentPoint)
     : null;
+  const drawingStatus = drawingState.paused ? 'Saving strokes—drawing paused'
+    : drawingState.preparing ? 'Preparing drawing…'
+      : drawingState.pending && !drawingState.drawing ? 'Saving strokes…' : null;
 
   return (
     <Box
@@ -1983,7 +2026,9 @@ function UnifiedPhotoEditor() {
       color="gray.900"
       onDrop={handleDrop}
       onDragOver={(event) => event.preventDefault()}
-      aria-busy={isBusy}
+      aria-busy={isBusy || drawingState.pending || drawingState.preparing}
+      data-saving={drawingState.pending ? 'true' : 'false'}
+      data-pending-strokes={drawingState.queuedStrokes || 0}
       onKeyDownCapture={(event) => {
         if (busyRef.current && !event.target.closest('[data-editor-reset]')) { event.preventDefault(); event.stopPropagation(); }
       }}
@@ -2006,6 +2051,7 @@ function UnifiedPhotoEditor() {
               </Badge>
               <Text>{doc.layers.length} layer{doc.layers.length === 1 ? '' : 's'}</Text>
               {isBusy && <Text color="blue.600" role="status">Processing image…</Text>}
+              {!isBusy && drawingStatus && <Text color="blue.600" role="status">{drawingStatus}</Text>}
             </HStack>
           </Box>
 
@@ -2044,7 +2090,7 @@ function UnifiedPhotoEditor() {
               <Tooltip label="Reset zoom to 100%" hasArrow>
                 <Button
                   aria-label="Reset zoom to 100%"
-                  onClick={resetView}
+                  onClick={() => runAfterDrawing(resetView)}
                   isDisabled={!hasDocument(doc)}
                   size="sm"
                   variant="ghost"
@@ -2119,12 +2165,12 @@ function UnifiedPhotoEditor() {
             borderRadius="md"
             p={2}
           >
-            <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => setActiveTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => setActiveTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => setActiveTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => setActiveTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => setActiveTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => setActiveTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => chooseTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => chooseTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => chooseTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => chooseTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => chooseTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => chooseTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
           </HStack>
 
           <VStack
@@ -2137,12 +2183,12 @@ function UnifiedPhotoEditor() {
             borderRadius="md"
             p={2}
           >
-            <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => setActiveTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => setActiveTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => setActiveTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => setActiveTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => setActiveTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => setActiveTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => chooseTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => chooseTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => chooseTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => chooseTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => chooseTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => chooseTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
 
             <Divider />
 
@@ -2165,6 +2211,7 @@ function UnifiedPhotoEditor() {
             p={{ base: 3, md: 5 }}
           >
             {isBusy && <Badge position="absolute" top={3} right={3} zIndex={2} colorScheme="blue" pointerEvents="none">Processing image…</Badge>}
+            {drawingState.paused && <Badge position="absolute" top={3} right={3} zIndex={3} colorScheme="orange" pointerEvents="none">Saving strokes—drawing paused. Release the pointer to resume.</Badge>}
             {isResizePreview && (
               <Badge
                 position="absolute"
@@ -2211,6 +2258,7 @@ function UnifiedPhotoEditor() {
                 />
                 <canvas
                   ref={displayCanvasRef}
+                  data-editor-display="true"
                   onPointerDown={handlePointerDown}
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
@@ -2329,7 +2377,7 @@ function UnifiedPhotoEditor() {
                         flex={1}
                       />
                     </Tooltip>
-                    <Button size="sm" onClick={resetView} flex={1}>
+                    <Button size="sm" onClick={() => runAfterDrawing(resetView)} flex={1}>
                       100%
                     </Button>
                     <Tooltip label="Zoom in" hasArrow>
@@ -2595,14 +2643,14 @@ function UnifiedPhotoEditor() {
                               <GripVertical size={16} />
                             </Box>
                           </Tooltip>
-                          <LayerThumbnail layer={layer} client={rasterClientRef.current} />
+                          <LayerThumbnail layer={layer} client={rasterClientRef.current} suspended={drawingState.pending || drawingState.preparing} />
                           <Box flex={1} minW={0}>
                             <Input
                               value={layer.name}
                               size="sm"
                               fontWeight={isActive ? 'semibold' : 'normal'}
                               onChange={(event) => updateLayerMeta(layer.id, { name: event.target.value }, false)}
-                              onBlur={() => commitDocument(docRef.current)}
+                              onBlur={() => runAfterDrawing(() => commitDocument(docRef.current))}
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter') event.currentTarget.blur();
                               }}

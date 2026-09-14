@@ -1,0 +1,1156 @@
+{
+  "description": "Native process RSS observations for the responsive-drawing worker changes.",
+  "workload": {
+    "sourcePixels": [
+      4000,
+      3000
+    ],
+    "documentPixels": [
+      600,
+      480
+    ],
+    "strokes": 30,
+    "undoSnapshots": 30,
+    "exportPixels": [
+      4000,
+      3000
+    ],
+    "exportFormat": "image/png",
+    "harness": "scripts/browser/ram-check.html?mode=tiled",
+    "includesLiveDrawingController": false,
+    "note": "Exercises the raster worker and a visible 600 by 480 preview. It does not allocate the editor live-drawing planes or measure pointer-to-paint latency."
+  },
+  "method": {
+    "sampling": "Native process RSS sampled approximately once per second. Only workload-correlated process IDs are reported.",
+    "timeUnit": "Unix milliseconds",
+    "memoryUnit": "MiB (1048576 bytes)",
+    "initial": "First sample at or after the empty phase.",
+    "peak": "Maximum sampled RSS from empty through reset; includes import and export.",
+    "steady": "Median of samples from the steady phase through, but excluding, export-start. The range is also retained.",
+    "afterReset": "Median of samples from four seconds after reset through one second after complete.",
+    "phaseSample": "Nearest available sample within the retained workload interval; inspect sample time against phase time.",
+    "tabSetup": "Each workload opened in a fresh QA tab. Chrome used a new renderer; Safari reused its existing content and graphics processes."
+  },
+  "limitsBytes": {
+    "combinedCleanAndDirtyTiles": 83886080,
+    "dirtyTilesWithinCombinedPool": 33554432,
+    "scratchAllowance": 16777216,
+    "livePreviewAllowanceNotIncludedInThisHarness": 25165824,
+    "coordinateJournalNotIncludedInThisHarness": 4194304,
+    "sessionStorage": 2147483648
+  },
+  "limitations": [
+    "These are single-run observations, not a cap on browser RAM or a controlled comparison across implementations.",
+    "RSS excludes compressed/swapped memory, OS filesystem cache, and Chrome graphics-process allocations.",
+    "Safari shares graphics resources and can retain allocations from earlier tabs; summing content and graphics RSS can double-count shared pages.",
+    "Safari began with about 697 MiB in the reused content process. Its later decline makes a ratio against historical cold-process results misleading.",
+    "A one-second sampler can miss brief peaks. Decoding, encoding, canvas allocation, and browser memory reclamation remain outside the tile-cache limit.",
+    "Canonical stroke timings include persistence and rendering and must not be presented as live pointer-to-paint latency."
+  ],
+  "historicalReference": {
+    "file": "image-memory-measurements.json",
+    "note": "Earlier original-canvas and first disk-backed measurements remain unchanged. The current runs use the same short-stroke workload but different process histories; no Safari before/after ratio is asserted."
+  },
+  "measurements": [
+    {
+      "browser": "chrome",
+      "mode": "staged-tiles",
+      "contentPid": 61906,
+      "attribution": "New renderer appeared at navigation and its memory rose with import/strokes/export; the other newly observed renderer remained near 105 MiB.",
+      "steadyWindowStable": true,
+      "rssMiB": {
+        "contentMiB": {
+          "initial": 150.0625,
+          "sampledPeakBeforeReset": 478.65625,
+          "steadyWindowMedian": 403.765625,
+          "steadyWindowRange": [
+            403.6875,
+            403.765625
+          ],
+          "afterResetWindowMedian": 264.0625
+        }
+      },
+      "medianCanonicalStrokeMs": 74.04999999701977,
+      "exportMs": 197,
+      "workerStatsAtSteady": {
+        "backend": "opfs",
+        "storageBytes": 191864928,
+        "storageLimit": 2147483648,
+        "cacheBytes": 83120800,
+        "peakCacheBytes": 83870800,
+        "dirtyBytes": 0,
+        "peakDirtyBytes": 2097152,
+        "residentTileBytes": 83120800,
+        "peakResidentTileBytes": 83870800,
+        "tileMemoryLimit": 83886080,
+        "dirtyLimit": 33554432,
+        "scratchReserve": 16777216,
+        "rasterVersions": 30,
+        "tileFiles": 196
+      },
+      "workerStatsAfterReset": {
+        "backend": "opfs",
+        "storageBytes": 0,
+        "storageLimit": 2147483648,
+        "cacheBytes": 0,
+        "peakCacheBytes": 83870800,
+        "dirtyBytes": 0,
+        "peakDirtyBytes": 2097152,
+        "residentTileBytes": 0,
+        "peakResidentTileBytes": 83870800,
+        "tileMemoryLimit": 83886080,
+        "dirtyLimit": 33554432,
+        "scratchReserve": 16777216,
+        "rasterVersions": 0,
+        "tileFiles": 0
+      },
+      "phaseRssSamples": [
+        {
+          "phase": "empty",
+          "phaseTime": 1789356953953,
+          "nearestSample": {
+            "time": 1789356954297,
+            "elapsedMs": 344,
+            "contentMiB": 150.0625
+          }
+        },
+        {
+          "phase": "imported",
+          "phaseTime": 1789356957767,
+          "nearestSample": {
+            "time": 1789356957492,
+            "elapsedMs": 3539,
+            "contentMiB": 349.421875
+          }
+        },
+        {
+          "phase": "stroke-10",
+          "phaseTime": 1789356961884,
+          "nearestSample": {
+            "time": 1789356961767,
+            "elapsedMs": 7814,
+            "contentMiB": 378.359375
+          }
+        },
+        {
+          "phase": "stroke-20",
+          "phaseTime": 1789356963003,
+          "nearestSample": {
+            "time": 1789356962830,
+            "elapsedMs": 8877,
+            "contentMiB": 387.890625
+          }
+        },
+        {
+          "phase": "stroke-30",
+          "phaseTime": 1789356964092,
+          "nearestSample": {
+            "time": 1789356963932,
+            "elapsedMs": 9979,
+            "contentMiB": 391.140625
+          }
+        },
+        {
+          "phase": "settling",
+          "phaseTime": 1789356964125,
+          "nearestSample": {
+            "time": 1789356963932,
+            "elapsedMs": 9979,
+            "contentMiB": 391.140625
+          }
+        },
+        {
+          "phase": "steady",
+          "phaseTime": 1789356970129,
+          "nearestSample": {
+            "time": 1789356970322,
+            "elapsedMs": 16369,
+            "contentMiB": 403.765625
+          }
+        },
+        {
+          "phase": "export-start",
+          "phaseTime": 1789356973139,
+          "nearestSample": {
+            "time": 1789356973510,
+            "elapsedMs": 19557,
+            "contentMiB": 478.65625
+          }
+        },
+        {
+          "phase": "export-end",
+          "phaseTime": 1789356973347,
+          "nearestSample": {
+            "time": 1789356973510,
+            "elapsedMs": 19557,
+            "contentMiB": 478.65625
+          }
+        },
+        {
+          "phase": "reset",
+          "phaseTime": 1789356976391,
+          "nearestSample": {
+            "time": 1789356976696,
+            "elapsedMs": 22743,
+            "contentMiB": 265.328125
+          }
+        },
+        {
+          "phase": "complete",
+          "phaseTime": 1789356982397,
+          "nearestSample": {
+            "time": 1789356982024,
+            "elapsedMs": 28071,
+            "contentMiB": 263.25
+          }
+        }
+      ],
+      "rssSamples": [
+        {
+          "time": 1789356953232,
+          "elapsedMs": -721,
+          "contentMiB": 104.625
+        },
+        {
+          "time": 1789356954297,
+          "elapsedMs": 344,
+          "contentMiB": 150.0625
+        },
+        {
+          "time": 1789356955365,
+          "elapsedMs": 1412,
+          "contentMiB": 150.234375
+        },
+        {
+          "time": 1789356956425,
+          "elapsedMs": 2472,
+          "contentMiB": 150.203125
+        },
+        {
+          "time": 1789356957492,
+          "elapsedMs": 3539,
+          "contentMiB": 349.421875
+        },
+        {
+          "time": 1789356958564,
+          "elapsedMs": 4611,
+          "contentMiB": 327.765625
+        },
+        {
+          "time": 1789356959637,
+          "elapsedMs": 5684,
+          "contentMiB": 327.765625
+        },
+        {
+          "time": 1789356960696,
+          "elapsedMs": 6743,
+          "contentMiB": 327.703125
+        },
+        {
+          "time": 1789356961767,
+          "elapsedMs": 7814,
+          "contentMiB": 378.359375
+        },
+        {
+          "time": 1789356962830,
+          "elapsedMs": 8877,
+          "contentMiB": 387.890625
+        },
+        {
+          "time": 1789356963932,
+          "elapsedMs": 9979,
+          "contentMiB": 391.140625
+        },
+        {
+          "time": 1789356964997,
+          "elapsedMs": 11044,
+          "contentMiB": 402.390625
+        },
+        {
+          "time": 1789356966067,
+          "elapsedMs": 12114,
+          "contentMiB": 402.296875
+        },
+        {
+          "time": 1789356967129,
+          "elapsedMs": 13176,
+          "contentMiB": 402.25
+        },
+        {
+          "time": 1789356968202,
+          "elapsedMs": 14249,
+          "contentMiB": 402.25
+        },
+        {
+          "time": 1789356969264,
+          "elapsedMs": 15311,
+          "contentMiB": 402.25
+        },
+        {
+          "time": 1789356970322,
+          "elapsedMs": 16369,
+          "contentMiB": 403.765625
+        },
+        {
+          "time": 1789356971381,
+          "elapsedMs": 17428,
+          "contentMiB": 403.765625
+        },
+        {
+          "time": 1789356972436,
+          "elapsedMs": 18483,
+          "contentMiB": 403.6875
+        },
+        {
+          "time": 1789356973510,
+          "elapsedMs": 19557,
+          "contentMiB": 478.65625
+        },
+        {
+          "time": 1789356974570,
+          "elapsedMs": 20617,
+          "contentMiB": 478.65625
+        },
+        {
+          "time": 1789356975634,
+          "elapsedMs": 21681,
+          "contentMiB": 478.5625
+        },
+        {
+          "time": 1789356976696,
+          "elapsedMs": 22743,
+          "contentMiB": 265.328125
+        },
+        {
+          "time": 1789356977764,
+          "elapsedMs": 23811,
+          "contentMiB": 264.15625
+        },
+        {
+          "time": 1789356978832,
+          "elapsedMs": 24879,
+          "contentMiB": 264.0625
+        },
+        {
+          "time": 1789356979902,
+          "elapsedMs": 25949,
+          "contentMiB": 264.0625
+        },
+        {
+          "time": 1789356980963,
+          "elapsedMs": 27010,
+          "contentMiB": 264.0625
+        },
+        {
+          "time": 1789356982024,
+          "elapsedMs": 28071,
+          "contentMiB": 263.25
+        },
+        {
+          "time": 1789356983098,
+          "elapsedMs": 29145,
+          "contentMiB": 264.125
+        }
+      ],
+      "workload": {
+        "kind": "ram-tiled",
+        "phase": "complete",
+        "mode": "tiled",
+        "phases": [
+          {
+            "name": "empty",
+            "time": 1789356953953
+          },
+          {
+            "name": "imported",
+            "time": 1789356957767,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 63750000,
+              "storageLimit": 2147483648,
+              "cacheBytes": 63750000,
+              "peakCacheBytes": 63750000,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 0,
+              "residentTileBytes": 63750000,
+              "peakResidentTileBytes": 63750000,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 1,
+              "tileFiles": 65
+            }
+          },
+          {
+            "name": "stroke-10",
+            "time": 1789356961884,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 107753552,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83406928,
+              "peakCacheBytes": 83814800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83406928,
+              "peakResidentTileBytes": 83814800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 11,
+              "tileFiles": 110
+            }
+          },
+          {
+            "name": "stroke-20",
+            "time": 1789356963003,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 151757104,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 21,
+              "tileFiles": 155
+            }
+          },
+          {
+            "name": "stroke-30",
+            "time": 1789356964092,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "settling",
+            "time": 1789356964125,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "steady",
+            "time": 1789356970129,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "export-start",
+            "time": 1789356973139
+          },
+          {
+            "name": "export-end",
+            "time": 1789356973347,
+            "milliseconds": 197,
+            "bytes": 354261
+          },
+          {
+            "name": "reset",
+            "time": 1789356976391
+          },
+          {
+            "name": "complete",
+            "time": 1789356982397,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 0,
+              "storageLimit": 2147483648,
+              "cacheBytes": 0,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 0,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 0,
+              "tileFiles": 0
+            }
+          }
+        ],
+        "times": [
+          89.7999999821186,
+          105.90000000596046,
+          77.90000000596046,
+          67.89999997615814,
+          73.30000001192093,
+          67,
+          119.2000000178814,
+          74.59999999403954,
+          73.90000000596046,
+          80.60000002384186,
+          70.40000000596046,
+          101.90000000596046,
+          63.099999994039536,
+          76.80000001192093,
+          74.19999998807907,
+          67.30000001192093,
+          127.90000000596046,
+          71.5,
+          72.39999997615814,
+          76.30000001192093,
+          67.7000000178814,
+          110.5,
+          59.19999998807907,
+          83.90000000596046,
+          73.30000001192093,
+          65,
+          105.40000000596046,
+          78.39999997615814,
+          65.90000000596046,
+          64.59999999403954
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+      }
+    },
+    {
+      "browser": "safari",
+      "mode": "staged-tiles",
+      "contentPid": 10628,
+      "graphicsPid": 8865,
+      "attribution": "Content and graphics process activity followed the workload phases. Safari reused these processes after earlier checks; their RSS can include other tabs and retained allocations.",
+      "steadyWindowStable": false,
+      "steadyWindowWarning": "Content RSS fell from 613.42 to 541.08 MiB during the three-sample labeled steady window. This run was still reclaiming earlier allocations and is not a cold-process before/after memory comparison.",
+      "rssMiB": {
+        "contentMiB": {
+          "initial": 696.71875,
+          "sampledPeakBeforeReset": 707.84375,
+          "steadyWindowMedian": 602.796875,
+          "steadyWindowRange": [
+            541.078125,
+            613.421875
+          ],
+          "afterResetWindowMedian": 527.71875
+        },
+        "graphicsMiB": {
+          "initial": 130.5625,
+          "sampledPeakBeforeReset": 233.921875,
+          "steadyWindowMedian": 206.6875,
+          "steadyWindowRange": [
+            202.59375,
+            209.15625
+          ],
+          "afterResetWindowMedian": 184.421875
+        },
+        "summedMiB": {
+          "initial": 827.28125,
+          "sampledPeakBeforeReset": 939.265625,
+          "steadyWindowMedian": 809.484375,
+          "steadyWindowRange": [
+            743.671875,
+            822.578125
+          ],
+          "afterResetWindowMedian": 712.140625
+        }
+      },
+      "medianCanonicalStrokeMs": 77.5,
+      "exportMs": 555,
+      "workerStatsAtSteady": {
+        "backend": "opfs",
+        "storageBytes": 191864928,
+        "storageLimit": 2147483648,
+        "cacheBytes": 83120800,
+        "peakCacheBytes": 83870800,
+        "dirtyBytes": 0,
+        "peakDirtyBytes": 2097152,
+        "residentTileBytes": 83120800,
+        "peakResidentTileBytes": 83870800,
+        "tileMemoryLimit": 83886080,
+        "dirtyLimit": 33554432,
+        "scratchReserve": 16777216,
+        "rasterVersions": 30,
+        "tileFiles": 196
+      },
+      "workerStatsAfterReset": {
+        "backend": "opfs",
+        "storageBytes": 0,
+        "storageLimit": 2147483648,
+        "cacheBytes": 0,
+        "peakCacheBytes": 83870800,
+        "dirtyBytes": 0,
+        "peakDirtyBytes": 2097152,
+        "residentTileBytes": 0,
+        "peakResidentTileBytes": 83870800,
+        "tileMemoryLimit": 83886080,
+        "dirtyLimit": 33554432,
+        "scratchReserve": 16777216,
+        "rasterVersions": 0,
+        "tileFiles": 0
+      },
+      "phaseRssSamples": [
+        {
+          "phase": "empty",
+          "phaseTime": 1789356888057,
+          "nearestSample": {
+            "time": 1789356888383,
+            "elapsedMs": 326,
+            "contentMiB": 696.71875,
+            "graphicsMiB": 130.5625,
+            "summedMiB": 827.28125
+          }
+        },
+        {
+          "phase": "imported",
+          "phaseTime": 1789356891653,
+          "nearestSample": {
+            "time": 1789356891575,
+            "elapsedMs": 3518,
+            "contentMiB": 704.875,
+            "graphicsMiB": 192.078125,
+            "summedMiB": 896.953125
+          }
+        },
+        {
+          "phase": "stroke-10",
+          "phaseTime": 1789356895769,
+          "nearestSample": {
+            "time": 1789356895825,
+            "elapsedMs": 7768,
+            "contentMiB": 707.703125,
+            "graphicsMiB": 229.578125,
+            "summedMiB": 937.28125
+          }
+        },
+        {
+          "phase": "stroke-20",
+          "phaseTime": 1789356896836,
+          "nearestSample": {
+            "time": 1789356896887,
+            "elapsedMs": 8830,
+            "contentMiB": 707.84375,
+            "graphicsMiB": 231.421875,
+            "summedMiB": 939.265625
+          }
+        },
+        {
+          "phase": "stroke-30",
+          "phaseTime": 1789356897919,
+          "nearestSample": {
+            "time": 1789356897960,
+            "elapsedMs": 9903,
+            "contentMiB": 677.625,
+            "graphicsMiB": 232.890625,
+            "summedMiB": 910.515625
+          }
+        },
+        {
+          "phase": "settling",
+          "phaseTime": 1789356897953,
+          "nearestSample": {
+            "time": 1789356897960,
+            "elapsedMs": 9903,
+            "contentMiB": 677.625,
+            "graphicsMiB": 232.890625,
+            "summedMiB": 910.515625
+          }
+        },
+        {
+          "phase": "steady",
+          "phaseTime": 1789356903956,
+          "nearestSample": {
+            "time": 1789356904357,
+            "elapsedMs": 16300,
+            "contentMiB": 613.421875,
+            "graphicsMiB": 209.15625,
+            "summedMiB": 822.578125
+          }
+        },
+        {
+          "phase": "export-start",
+          "phaseTime": 1789356906966,
+          "nearestSample": {
+            "time": 1789356906515,
+            "elapsedMs": 18458,
+            "contentMiB": 541.078125,
+            "graphicsMiB": 202.59375,
+            "summedMiB": 743.671875
+          }
+        },
+        {
+          "phase": "export-end",
+          "phaseTime": 1789356907528,
+          "nearestSample": {
+            "time": 1789356907577,
+            "elapsedMs": 19520,
+            "contentMiB": 529.5,
+            "graphicsMiB": 233.921875,
+            "summedMiB": 763.421875
+          }
+        },
+        {
+          "phase": "reset",
+          "phaseTime": 1789356910550,
+          "nearestSample": {
+            "time": 1789356910750,
+            "elapsedMs": 22693,
+            "contentMiB": 527.71875,
+            "graphicsMiB": 186.578125,
+            "summedMiB": 714.296875
+          }
+        },
+        {
+          "phase": "complete",
+          "phaseTime": 1789356916554,
+          "nearestSample": {
+            "time": 1789356916055,
+            "elapsedMs": 27998,
+            "contentMiB": 527.703125,
+            "graphicsMiB": 184.421875,
+            "summedMiB": 712.125
+          }
+        }
+      ],
+      "rssSamples": [
+        {
+          "time": 1789356887326,
+          "elapsedMs": -731,
+          "contentMiB": 697.203125,
+          "graphicsMiB": 140.21875,
+          "summedMiB": 837.421875
+        },
+        {
+          "time": 1789356888383,
+          "elapsedMs": 326,
+          "contentMiB": 696.71875,
+          "graphicsMiB": 130.5625,
+          "summedMiB": 827.28125
+        },
+        {
+          "time": 1789356889450,
+          "elapsedMs": 1393,
+          "contentMiB": 696.84375,
+          "graphicsMiB": 130.578125,
+          "summedMiB": 827.421875
+        },
+        {
+          "time": 1789356890514,
+          "elapsedMs": 2457,
+          "contentMiB": 696.9375,
+          "graphicsMiB": 130.578125,
+          "summedMiB": 827.515625
+        },
+        {
+          "time": 1789356891575,
+          "elapsedMs": 3518,
+          "contentMiB": 704.875,
+          "graphicsMiB": 192.078125,
+          "summedMiB": 896.953125
+        },
+        {
+          "time": 1789356892648,
+          "elapsedMs": 4591,
+          "contentMiB": 705.171875,
+          "graphicsMiB": 220.453125,
+          "summedMiB": 925.625
+        },
+        {
+          "time": 1789356893708,
+          "elapsedMs": 5651,
+          "contentMiB": 705.171875,
+          "graphicsMiB": 220.453125,
+          "summedMiB": 925.625
+        },
+        {
+          "time": 1789356894770,
+          "elapsedMs": 6713,
+          "contentMiB": 705.171875,
+          "graphicsMiB": 220.484375,
+          "summedMiB": 925.65625
+        },
+        {
+          "time": 1789356895825,
+          "elapsedMs": 7768,
+          "contentMiB": 707.703125,
+          "graphicsMiB": 229.578125,
+          "summedMiB": 937.28125
+        },
+        {
+          "time": 1789356896887,
+          "elapsedMs": 8830,
+          "contentMiB": 707.84375,
+          "graphicsMiB": 231.421875,
+          "summedMiB": 939.265625
+        },
+        {
+          "time": 1789356897960,
+          "elapsedMs": 9903,
+          "contentMiB": 677.625,
+          "graphicsMiB": 232.890625,
+          "summedMiB": 910.515625
+        },
+        {
+          "time": 1789356899029,
+          "elapsedMs": 10972,
+          "contentMiB": 616.75,
+          "graphicsMiB": 216.609375,
+          "summedMiB": 833.359375
+        },
+        {
+          "time": 1789356900094,
+          "elapsedMs": 12037,
+          "contentMiB": 616.75,
+          "graphicsMiB": 216.578125,
+          "summedMiB": 833.328125
+        },
+        {
+          "time": 1789356901164,
+          "elapsedMs": 13107,
+          "contentMiB": 616.75,
+          "graphicsMiB": 216.578125,
+          "summedMiB": 833.328125
+        },
+        {
+          "time": 1789356902232,
+          "elapsedMs": 14175,
+          "contentMiB": 616.75,
+          "graphicsMiB": 216.578125,
+          "summedMiB": 833.328125
+        },
+        {
+          "time": 1789356903297,
+          "elapsedMs": 15240,
+          "contentMiB": 614.296875,
+          "graphicsMiB": 214.890625,
+          "summedMiB": 829.1875
+        },
+        {
+          "time": 1789356904357,
+          "elapsedMs": 16300,
+          "contentMiB": 613.421875,
+          "graphicsMiB": 209.15625,
+          "summedMiB": 822.578125
+        },
+        {
+          "time": 1789356905423,
+          "elapsedMs": 17366,
+          "contentMiB": 602.796875,
+          "graphicsMiB": 206.6875,
+          "summedMiB": 809.484375
+        },
+        {
+          "time": 1789356906515,
+          "elapsedMs": 18458,
+          "contentMiB": 541.078125,
+          "graphicsMiB": 202.59375,
+          "summedMiB": 743.671875
+        },
+        {
+          "time": 1789356907577,
+          "elapsedMs": 19520,
+          "contentMiB": 529.5,
+          "graphicsMiB": 233.921875,
+          "summedMiB": 763.421875
+        },
+        {
+          "time": 1789356908635,
+          "elapsedMs": 20578,
+          "contentMiB": 529.65625,
+          "graphicsMiB": 188.375,
+          "summedMiB": 718.03125
+        },
+        {
+          "time": 1789356909690,
+          "elapsedMs": 21633,
+          "contentMiB": 529.65625,
+          "graphicsMiB": 188.375,
+          "summedMiB": 718.03125
+        },
+        {
+          "time": 1789356910750,
+          "elapsedMs": 22693,
+          "contentMiB": 527.71875,
+          "graphicsMiB": 186.578125,
+          "summedMiB": 714.296875
+        },
+        {
+          "time": 1789356911813,
+          "elapsedMs": 23756,
+          "contentMiB": 527.71875,
+          "graphicsMiB": 184.84375,
+          "summedMiB": 712.5625
+        },
+        {
+          "time": 1789356912871,
+          "elapsedMs": 24814,
+          "contentMiB": 527.71875,
+          "graphicsMiB": 184.421875,
+          "summedMiB": 712.140625
+        },
+        {
+          "time": 1789356913930,
+          "elapsedMs": 25873,
+          "contentMiB": 527.71875,
+          "graphicsMiB": 184.421875,
+          "summedMiB": 712.140625
+        },
+        {
+          "time": 1789356914992,
+          "elapsedMs": 26935,
+          "contentMiB": 527.71875,
+          "graphicsMiB": 184.421875,
+          "summedMiB": 712.140625
+        },
+        {
+          "time": 1789356916055,
+          "elapsedMs": 27998,
+          "contentMiB": 527.703125,
+          "graphicsMiB": 184.421875,
+          "summedMiB": 712.125
+        },
+        {
+          "time": 1789356917119,
+          "elapsedMs": 29062,
+          "contentMiB": 527.796875,
+          "graphicsMiB": 185.046875,
+          "summedMiB": 712.84375
+        }
+      ],
+      "workload": {
+        "kind": "ram-tiled",
+        "phase": "complete",
+        "mode": "tiled",
+        "phases": [
+          {
+            "name": "empty",
+            "time": 1789356888057
+          },
+          {
+            "name": "imported",
+            "time": 1789356891653,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 63750000,
+              "storageLimit": 2147483648,
+              "cacheBytes": 63750000,
+              "peakCacheBytes": 63750000,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 0,
+              "residentTileBytes": 63750000,
+              "peakResidentTileBytes": 63750000,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 1,
+              "tileFiles": 65
+            }
+          },
+          {
+            "name": "stroke-10",
+            "time": 1789356895769,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 107753552,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83406928,
+              "peakCacheBytes": 83814800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83406928,
+              "peakResidentTileBytes": 83814800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 11,
+              "tileFiles": 110
+            }
+          },
+          {
+            "name": "stroke-20",
+            "time": 1789356896836,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 151757104,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 21,
+              "tileFiles": 155
+            }
+          },
+          {
+            "name": "stroke-30",
+            "time": 1789356897919,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "settling",
+            "time": 1789356897953,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "steady",
+            "time": 1789356903956,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 191864928,
+              "storageLimit": 2147483648,
+              "cacheBytes": 83120800,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 83120800,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 30,
+              "tileFiles": 196
+            }
+          },
+          {
+            "name": "export-start",
+            "time": 1789356906966
+          },
+          {
+            "name": "export-end",
+            "time": 1789356907528,
+            "milliseconds": 555,
+            "bytes": 339749
+          },
+          {
+            "name": "reset",
+            "time": 1789356910550
+          },
+          {
+            "name": "complete",
+            "time": 1789356916554,
+            "stats": {
+              "backend": "opfs",
+              "storageBytes": 0,
+              "storageLimit": 2147483648,
+              "cacheBytes": 0,
+              "peakCacheBytes": 83870800,
+              "dirtyBytes": 0,
+              "peakDirtyBytes": 2097152,
+              "residentTileBytes": 0,
+              "peakResidentTileBytes": 83870800,
+              "tileMemoryLimit": 83886080,
+              "dirtyLimit": 33554432,
+              "scratchReserve": 16777216,
+              "rasterVersions": 0,
+              "tileFiles": 0
+            }
+          }
+        ],
+        "times": [
+          121,
+          111,
+          62,
+          102,
+          77,
+          67,
+          90,
+          70,
+          61,
+          75,
+          52,
+          85,
+          60,
+          70,
+          60,
+          69,
+          102,
+          78,
+          83,
+          96,
+          92,
+          88,
+          56,
+          79,
+          66,
+          62,
+          78,
+          78,
+          111,
+          59
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
+      }
+    }
+  ]
+}

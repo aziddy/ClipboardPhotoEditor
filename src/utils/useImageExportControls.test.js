@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useImageExportControls } from './useImageExportControls';
-import { calculateImageSize, downloadImageBlob } from './imageExport';
+import { calculateImageSize, copyImageBlob, downloadImageBlob } from './imageExport';
 
 jest.mock('@chakra-ui/react', () => ({}));
 jest.mock('./imageExport', () => ({
@@ -79,4 +79,58 @@ test('legacy canvas providers still export both formats on request', async () =>
   render({ current: canvas });
   await act(async () => controls.updateOutputSizes());
   expect(calculateImageSize.mock.calls).toEqual([[canvas, 'image/png', 1], [canvas, 'image/jpeg', 0.9]]);
+});
+
+test.each(['before', 'after'])('sizes follow a pending stroke commit when React renders %s encoding finishes', async (renderTiming) => {
+  const pending = deferred();
+  let currentRevision = 'before-stroke';
+  const getRevision = () => currentRevision;
+  const exportBlob = jest.fn((format) => format === 'image/png' ? pending.promise
+    : Promise.resolve({ blob: sizedBlob(2), revision: currentRevision }));
+  render({ revision: currentRevision, getRevision, exportBlob });
+  let job;
+  act(() => { job = controls.updateOutputSizes(); });
+  currentRevision = 'committed-stroke';
+  if (renderTiming === 'before') render({ revision: currentRevision, getRevision, exportBlob });
+  await act(async () => {
+    pending.resolve({ blob: sizedBlob(1), revision: currentRevision });
+    await job;
+  });
+  if (renderTiming === 'after') render({ revision: currentRevision, getRevision, exportBlob });
+  expect(exportBlob.mock.calls).toEqual([['image/png', 1], ['image/jpeg', 0.9]]);
+  expect(controls.outputSizes).toEqual({ png: '1.00', jpg: '2.00' });
+});
+
+test('an acknowledged export revision cannot publish sizes for a subsequent unrelated edit', async () => {
+  const pending = deferred();
+  let currentRevision = 'before-stroke';
+  const getRevision = () => currentRevision;
+  const exportBlob = jest.fn(() => pending.promise);
+  render({ revision: currentRevision, getRevision, exportBlob });
+  let job;
+  act(() => { job = controls.updateOutputSizes(); });
+  currentRevision = 'newer-edit';
+  render({ revision: currentRevision, getRevision, exportBlob });
+  await act(async () => {
+    pending.resolve({ blob: sizedBlob(1), revision: 'committed-stroke' });
+    await job;
+  });
+  expect(exportBlob).toHaveBeenCalledTimes(1);
+  expect(controls.outputSizes).toEqual({ png: null, jpg: null });
+});
+
+test('copy receives its Blob promise during the click while an export revision barrier is pending', async () => {
+  const pending = deferred();
+  let suppliedBlob;
+  copyImageBlob.mockImplementation((promise) => promise.then((blob) => { suppliedBlob = blob; return true; }));
+  const exportBlob = jest.fn(() => pending.promise);
+  render({ revision: 'first', exportBlob });
+  let job;
+  act(() => { job = controls.handleCopyToPNG(); });
+  expect(copyImageBlob).toHaveBeenCalledTimes(1);
+  expect(copyImageBlob.mock.calls[0][0]).toBeInstanceOf(Promise);
+  expect(suppliedBlob).toBeUndefined();
+  const blob = sizedBlob(1);
+  await act(async () => { pending.resolve({ blob, revision: 'first' }); await job; });
+  expect(suppliedBlob).toBe(blob);
 });

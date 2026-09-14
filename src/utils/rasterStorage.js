@@ -1,6 +1,7 @@
 export const TILE_SIZE = 512;
-export const RASTER_MEMORY_LIMIT = 64 * 1024 * 1024;
+export const RASTER_MEMORY_LIMIT = 96 * 1024 * 1024;
 export const RASTER_SCRATCH_RESERVE = 16 * 1024 * 1024;
+export const RASTER_DIRTY_LIMIT = 32 * 1024 * 1024;
 export const DISK_LIMIT = 2 * 1024 * 1024 * 1024;
 export const MEMORY_STORAGE_LIMIT = 256 * 1024 * 1024;
 const STORAGE_NAME = 'clipboard-photo-rasters-v1';
@@ -36,6 +37,11 @@ export class RasterCache {
     this.entries.set(id, data);
     this.bytes += data.byteLength;
     this.peakBytes = Math.max(this.peakBytes, this.bytes);
+  }
+
+  setLimit(limit) {
+    this.limit = Math.max(0, limit);
+    while (this.bytes > this.limit) this.delete(this.entries.keys().next().value);
   }
 
   delete(id) {

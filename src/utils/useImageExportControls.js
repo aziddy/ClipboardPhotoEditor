@@ -42,6 +42,7 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
   const [isExportBusy, setIsExportBusy] = useState(false);
   const generationRef = useRef(0);
   const revisionRef = useRef(canvasSource?.revision ?? canvasSource);
+  const sizeRevisionsRef = useRef({ png: null, jpg: null });
   const qualityRef = useRef(jpegQuality);
   const jobsRef = useRef(new Map());
   const busyCountRef = useRef(0);
@@ -49,37 +50,60 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
   revisionRef.current = revision;
   qualityRef.current = jpegQuality;
 
-  useEffect(() => { setOutputSizes({ png: null, jpg: null }); }, [revision]);
-  useEffect(() => { setOutputSizes((current) => ({ ...current, jpg: null })); }, [jpegQuality]);
+  useEffect(() => {
+    setOutputSizes((current) => ({
+      png: sizeRevisionsRef.current.png === revision ? current.png : null,
+      jpg: sizeRevisionsRef.current.jpg === revision ? current.jpg : null,
+    }));
+  }, [revision]);
+  useEffect(() => {
+    sizeRevisionsRef.current.jpg = null;
+    setOutputSizes((current) => ({ ...current, jpg: null }));
+  }, [jpegQuality]);
   useEffect(() => () => {
     generationRef.current += 1;
     jobsRef.current.clear();
   }, []);
 
-  const getBlob = useCallback((format, quality) => {
+  const getCurrentRevision = useCallback(() => (
+    typeof canvasSource?.getRevision === 'function' ? canvasSource.getRevision() : revisionRef.current
+  ), [canvasSource]);
+
+  const getExport = useCallback((format, quality) => {
     const generation = generationRef.current;
+    const requestedRevision = typeof canvasSource?.getRevision === 'function' ? canvasSource.getRevision() : revision;
     const key = `${format}:${quality}`;
     const existing = jobsRef.current.get(key);
-    if (existing?.revision === revision && existing.generation === generation) return existing.promise;
+    if (existing?.revision === requestedRevision && existing.generation === generation) return existing.promise;
     const promise = (async () => {
       let blob;
+      let exportedRevision = requestedRevision;
       if (typeof canvasSource?.exportBlob === 'function') {
-        blob = await canvasSource.exportBlob(format, quality);
+        const result = await canvasSource.exportBlob(format, quality);
+        // A provider can first persist pending edits. Its returned revision names
+        // the pixels actually encoded, which can differ from the click's revision.
+        if (result && typeof result === 'object' && 'blob' in result && 'revision' in result) {
+          blob = result.blob;
+          exportedRevision = result.revision;
+        } else blob = result;
       } else {
         const canvas = await (typeof canvasSource === 'function' ? canvasSource() : canvasSource?.current);
         blob = (await calculateImageSize(canvas, format, quality)).blob;
       }
       if (!blob) throw new Error('No image is available to export.');
-      if (generation === generationRef.current && revision === revisionRef.current && (format === 'image/png' || quality === qualityRef.current / 100)) {
-        setOutputSizes((current) => ({ ...current, [format === 'image/png' ? 'png' : 'jpg']: (blob.size / (1024 * 1024)).toFixed(2) }));
+      if (generation === generationRef.current && exportedRevision === getCurrentRevision() && (format === 'image/png' || quality === qualityRef.current / 100)) {
+        const type = format === 'image/png' ? 'png' : 'jpg';
+        sizeRevisionsRef.current[type] = exportedRevision;
+        setOutputSizes((current) => ({ ...current, [type]: (blob.size / (1024 * 1024)).toFixed(2) }));
       }
-      return blob;
+      return { blob, revision: exportedRevision };
     })();
-    jobsRef.current.set(key, { promise, revision, generation });
+    jobsRef.current.set(key, { promise, revision: requestedRevision, generation });
     const clear = () => { if (jobsRef.current.get(key)?.promise === promise) jobsRef.current.delete(key); };
     promise.then(clear, clear);
     return promise;
-  }, [canvasSource, revision]);
+  }, [canvasSource, getCurrentRevision, revision]);
+  const getBlob = useCallback((format, quality) => getExport(format, quality).then((result) => result.blob), [getExport]);
 
   const trackJob = useCallback((job) => {
     const generation = generationRef.current;
@@ -94,13 +118,13 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
   const updateOutputSizes = useCallback(() => trackJob((async () => {
     const generation = generationRef.current;
     try {
-      await getBlob('image/png', 1);
-      if (generation !== generationRef.current || revision !== revisionRef.current || jpegQuality !== qualityRef.current) return;
-      await getBlob('image/jpeg', jpegQuality / 100);
+      const png = await getExport('image/png', 1);
+      if (generation !== generationRef.current || png.revision !== getCurrentRevision() || jpegQuality !== qualityRef.current) return;
+      await getExport('image/jpeg', jpegQuality / 100);
     } catch (error) {
       if (error.name !== 'AbortError' && !automaticSizeUpdates) toast({ title: 'Could not calculate sizes', description: error.message, status: 'error' });
     }
-  })()), [automaticSizeUpdates, getBlob, jpegQuality, revision, toast, trackJob]);
+  })()), [automaticSizeUpdates, getCurrentRevision, getExport, jpegQuality, toast, trackJob]);
 
   useEffect(() => {
     if (automaticSizeUpdates) updateOutputSizes();
@@ -127,6 +151,7 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
 
   const resetExportState = useCallback(() => {
     generationRef.current += 1; jobsRef.current.clear(); busyCountRef.current = 0;
+    sizeRevisionsRef.current = { png: null, jpg: null };
     setIsExportBusy(false); setOutputSizes({ png: null, jpg: null }); setJpegQuality(90);
   }, []);
   const handleQualityChange = useCallback((quality) => setJpegQuality(quality), []);

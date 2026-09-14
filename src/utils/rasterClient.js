@@ -1,5 +1,10 @@
 import { createLayerId } from './editorLayers';
 
+const closeBitmaps = (result) => {
+  result?.bitmap?.close();
+  result?.bitmaps?.forEach((bitmap) => bitmap.close());
+};
+
 export const createRasterClient = (onEvent = () => {}) => {
   let worker;
   let ready;
@@ -10,7 +15,7 @@ export const createRasterClient = (onEvent = () => {}) => {
   const pending = new Map();
   const post = (method, args = {}, transfer = []) => new Promise((resolve, reject) => {
     const id = ++nextId;
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve, reject, method });
     try { worker.postMessage({ id, method, args }, transfer); }
     catch (error) { pending.delete(id); reject(error); }
   });
@@ -22,7 +27,12 @@ export const createRasterClient = (onEvent = () => {}) => {
       if (data.stats) latestStats = data.stats;
       const request = pending.get(data.id);
       pending.delete(data.id);
-      if (!request) { data.result?.bitmap?.close(); return; }
+      if (!request) { closeBitmaps(data.result); return; }
+      if (disposed && request.method !== 'init' && request.method !== 'dispose') {
+        closeBitmaps(data.result);
+        request.reject(Object.assign(new Error('Editor was reset.'), { name: 'AbortError' }));
+        return;
+      }
       if (data.error) request.reject(Object.assign(new Error(data.error.message), { name: data.error.name }));
       else request.resolve(data.result);
     };

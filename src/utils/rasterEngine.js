@@ -1,7 +1,10 @@
 import {
   MAX_DIMENSION, createLayerId, invertTransform, multiplyTransforms, transformPoint,
 } from './editorLayers';
-import { RasterCache, TILE_SIZE, RASTER_SCRATCH_RESERVE, storageFull } from './rasterStorage';
+import {
+  RasterCache, TILE_SIZE, RASTER_MEMORY_LIMIT, RASTER_DIRTY_LIMIT,
+  RASTER_SCRATCH_RESERVE, storageFull,
+} from './rasterStorage';
 
 const tileKey = (x, y) => `${x},${y}`;
 const coordinates = (key) => key.split(',').map(Number);
@@ -39,10 +42,16 @@ export const alphaBounds = (data, width, height) => {
 };
 
 export class RasterEngine {
-  constructor(storage, notify = () => {}) {
+  constructor(storage, notify = () => {}, options = {}) {
     this.storage = storage;
     this.notify = notify;
-    this.cache = new RasterCache();
+    this.tileMemoryLimit = options.tileMemoryLimit ?? RASTER_MEMORY_LIMIT - RASTER_SCRATCH_RESERVE;
+    this.dirtyLimit = Math.min(options.dirtyLimit ?? RASTER_DIRTY_LIMIT, this.tileMemoryLimit);
+    this.cache = new RasterCache(this.tileMemoryLimit);
+    this.dirtyTiles = new Map();
+    this.dirtyBytes = 0;
+    this.peakDirtyBytes = 0;
+    this.peakResidentBytes = 0;
     this.versions = new Map();
     this.pending = new Set();
     this.files = new Map();
@@ -60,6 +69,10 @@ export class RasterEngine {
     return {
       backend: this.storage.kind, storageBytes: this.bytes, storageLimit: this.storage.limit,
       cacheBytes: this.cache.bytes, peakCacheBytes: this.cache.peakBytes,
+      dirtyBytes: this.dirtyBytes, peakDirtyBytes: this.peakDirtyBytes,
+      residentTileBytes: this.cache.bytes + this.dirtyBytes,
+      peakResidentTileBytes: this.peakResidentBytes, tileMemoryLimit: this.tileMemoryLimit,
+      dirtyLimit: this.dirtyLimit,
       scratchReserve: RASTER_SCRATCH_RESERVE, rasterVersions: this.versions.size,
       tileFiles: this.files.size,
     };
@@ -106,11 +119,14 @@ export class RasterEngine {
   async blank({ width, height }) { return this.describe(this.createVersion(width, height)); }
 
   async readTile(tile) {
+    const dirty = this.dirtyTiles.get(tile.id);
+    if (dirty) return dirty.data;
     let data = this.cache.get(tile.id);
     if (!data) {
       data = await this.storage.read(tile.id);
       if (data.byteLength !== tile.width * tile.height * 4) throw new Error('Temporary image data is incomplete.');
       this.cache.set(tile.id, data);
+      this.recordResidentBytes();
     }
     return data;
   }
@@ -139,13 +155,21 @@ export class RasterEngine {
   }
 
   async saveTile(version, level, tx, ty, canvas) {
-    this.checkCanceled();
     const { width, height } = canvas;
     const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
     const bounds = alphaBounds(data, width, height);
+    await this.writeTile(version, level, tx, ty, { data, width, height, bounds });
+  }
+
+  recordResidentBytes() {
+    this.peakDirtyBytes = Math.max(this.peakDirtyBytes, this.dirtyBytes);
+    this.peakResidentBytes = Math.max(this.peakResidentBytes, this.cache.bytes + this.dirtyBytes);
+  }
+
+  async writeTile(version, level, tx, ty, { data, width, height, bounds, id = createLayerId() }, cache = true) {
+    this.checkCanceled();
     const key = tileKey(tx, ty);
     if (!bounds) { version.levels[level].delete(key); return; }
-    const id = createLayerId();
     while (true) {
       try {
         if (this.bytes + data.byteLength > this.storage.limit) throw storageFull();
@@ -159,7 +183,64 @@ export class RasterEngine {
     this.files.set(id, data.byteLength);
     this.bytes += data.byteLength;
     version.levels[level].set(key, { id, width, height, bounds });
-    this.cache.set(id, data);
+    if (cache) this.cache.set(id, data);
+    this.recordResidentBytes();
+  }
+
+  removeDirtyTile(key) {
+    const tile = this.stroke?.dirty.get(key);
+    if (!tile) return;
+    this.stroke.dirty.delete(key);
+    this.dirtyTiles.delete(tile.id);
+    this.dirtyBytes -= tile.data.byteLength;
+    this.cache.setLimit(this.tileMemoryLimit - this.dirtyBytes);
+  }
+
+  async flushDirtyTile(key) {
+    const stroke = this.stroke;
+    const tile = stroke.dirty.get(key);
+    if (!tile) return;
+    const [x, y] = coordinates(key);
+    await this.writeTile(stroke.version, 0, x, y, tile, false);
+    this.removeDirtyTile(key);
+    this.cache.set(tile.id, tile.data);
+    this.recordResidentBytes();
+  }
+
+  async stageTile(tx, ty, canvas) {
+    this.checkCanceled();
+    const stroke = this.stroke;
+    const key = tileKey(tx, ty);
+    const { width, height } = canvas;
+    const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+    const bounds = alphaBounds(data, width, height);
+    if (!bounds) {
+      this.removeDirtyTile(key);
+      stroke.version.levels[0].delete(key);
+      return;
+    }
+    let tile = stroke.dirty.get(key);
+    if (tile) {
+      tile.data.set(data);
+      tile.bounds = bounds;
+      // Insertion order tracks dirty-tile use for pressure spills.
+      stroke.dirty.delete(key);
+    } else {
+      if (data.byteLength > this.dirtyLimit) {
+        await this.writeTile(stroke.version, 0, tx, ty, { data, width, height, bounds });
+        return;
+      }
+      while (this.dirtyBytes + data.byteLength > this.dirtyLimit) {
+        await this.flushDirtyTile(stroke.dirty.keys().next().value);
+      }
+      tile = { id: createLayerId(), data, width, height, bounds };
+      this.dirtyBytes += data.byteLength;
+      this.cache.setLimit(this.tileMemoryLimit - this.dirtyBytes);
+      this.dirtyTiles.set(tile.id, tile);
+    }
+    stroke.dirty.set(key, tile);
+    stroke.version.levels[0].set(key, { id: tile.id, width, height, bounds });
+    this.recordResidentBytes();
   }
 
   async readRegion(version, level, x, y, width, height) {
@@ -262,9 +343,17 @@ export class RasterEngine {
     await this.collect();
   }
 
+  async releasePending({ rasterIds }) {
+    rasterIds.forEach((id) => this.pending.delete(id));
+    await this.collect();
+  }
+
   async collect() {
     const retained = new Set([...this.current, ...this.pending, ...this.inUse, ...this.history.flatMap((entry) => entry.rasters)]);
-    if (this.stroke) retained.add(this.stroke.version.id);
+    if (this.stroke) {
+      retained.add(this.stroke.version.id);
+      retained.add(this.stroke.originalId);
+    }
     const files = new Set();
     for (const [id, version] of this.versions) {
       if (!retained.has(id)) { this.versions.delete(id); continue; }
@@ -279,35 +368,81 @@ export class RasterEngine {
     }
   }
 
-  async beginStroke({ layer, point, size, color, erase }) {
+  checkStroke({ strokeId, sequence } = {}) {
+    const stroke = this.stroke;
+    if (!stroke || (strokeId !== undefined && strokeId !== stroke.id)) {
+      throw Object.assign(new Error('The stroke was canceled.'), { name: 'AbortError' });
+    }
+    if (sequence !== undefined) {
+      if (!Number.isSafeInteger(sequence) || sequence <= stroke.sequence) {
+        throw Object.assign(new Error('The stroke update is out of order.'), { name: 'AbortError' });
+      }
+      stroke.sequence = sequence;
+    }
+    return stroke;
+  }
+
+  async beginStroke({ layer, point, size, color, erase, strokeId, sequence = 0 }) {
     if (this.stroke) throw new Error('Finish the current stroke first.');
+    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error('The stroke sequence is invalid.');
     const original = this.version(layer.rasterId);
     const version = this.createVersion(original.width, original.height, original);
-    this.stroke = { version, transform: layer.transform, size, color, erase, lastPoint: point };
-    try { return await this.strokePoints({ points: [{ x: point.x + 0.01, y: point.y + 0.01 }] }); }
+    this.stroke = {
+      id: strokeId ?? createLayerId(), sequence, originalId: original.id,
+      version, transform: layer.transform, size, color, erase, lastPoint: point,
+      dirty: new Map(), changed: new Set(), regions: new Map(),
+    };
+    try {
+      await this.applyStrokePointBatch([{ x: point.x + 0.01, y: point.y + 0.01 }]);
+      return this.describe(version);
+    }
     catch (error) { await this.abortStroke(); throw error; }
   }
 
-  async strokePoints({ points }) {
+  async strokePoints({ points, strokeId, sequence }) {
+    const stroke = this.checkStroke({ strokeId, sequence });
+    const packed = ArrayBuffer.isView(points);
+    const count = packed ? points.length / 2 : points.length;
+    if (!Number.isInteger(count)) throw new Error('Stroke coordinates are incomplete.');
+    try {
+      // Keep scratch geometry bounded even when a delayed frame sends a large batch.
+      for (let start = 0; start < count; start += 128) {
+        const batch = [];
+        for (let i = start; i < Math.min(count, start + 128); i += 1) {
+          batch.push(packed ? { x: points[i * 2], y: points[i * 2 + 1] } : points[i]);
+        }
+        await this.applyStrokePointBatch(batch);
+      }
+      return this.describe(stroke.version);
+    } catch (error) { await this.abortStroke(); throw error; }
+  }
+
+  async applyStrokePointBatch(points) {
     const stroke = this.stroke;
-    if (!stroke) throw Object.assign(new Error('The stroke was canceled.'), { name: 'AbortError' });
     const { version, size, transform } = stroke;
     const inverse = invertTransform(transform);
     const tiles = new Map();
-    const dirtyRegions = [];
     let previous = stroke.lastPoint;
     for (const point of points) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) throw new Error('Stroke coordinates are invalid.');
       const padding = size / 2 + 2;
       const bounds = pointBounds(rectPoints({
         x: Math.min(previous.x, point.x) - padding, y: Math.min(previous.y, point.y) - padding,
         width: Math.abs(previous.x - point.x) + padding * 2, height: Math.abs(previous.y - point.y) + padding * 2,
       }).map((p) => transformPoint(inverse, p)));
-      dirtyRegions.push(bounds);
       for (let y = Math.max(0, Math.floor(bounds.y / TILE_SIZE)); y <= Math.min(Math.ceil(version.height / TILE_SIZE) - 1, Math.floor((bounds.y + bounds.height) / TILE_SIZE)); y += 1) {
         for (let x = Math.max(0, Math.floor(bounds.x / TILE_SIZE)); x <= Math.min(Math.ceil(version.width / TILE_SIZE) - 1, Math.floor((bounds.x + bounds.width) / TILE_SIZE)); x += 1) {
           const key = tileKey(x, y);
           if (!tiles.has(key)) tiles.set(key, []);
           tiles.get(key).push([previous, point]);
+          stroke.changed.add(key);
+          const left = Math.max(x * TILE_SIZE, bounds.x);
+          const top = Math.max(y * TILE_SIZE, bounds.y);
+          const right = Math.min((x + 1) * TILE_SIZE, bounds.x + bounds.width);
+          const bottom = Math.min((y + 1) * TILE_SIZE, bounds.y + bounds.height);
+          const region = { x: left, y: top, width: right - left, height: bottom - top };
+          const earlier = stroke.regions.get(key);
+          stroke.regions.set(key, earlier ? pointBounds([...rectPoints(earlier), ...rectPoints(region)]) : region);
         }
       }
       previous = point;
@@ -324,24 +459,31 @@ export class RasterEngine {
         segments.forEach(([from, to]) => {
           ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
         });
-        await this.saveTile(version, 0, x, y, canvas);
+        await this.stageTile(x, y, canvas);
       } finally { releaseCanvas(canvas); }
     }
     stroke.lastPoint = previous;
-    await this.buildMips(version, new Set(tiles.keys()), dirtyRegions);
-    await this.collect();
-    return this.describe(version);
   }
 
-  async finishStroke() {
-    if (!this.stroke) return null;
-    const result = this.describe(this.stroke.version);
-    this.stroke = null;
-    return result;
+  async finishStroke(args = {}) {
+    if (!this.stroke && args.strokeId === undefined) return null;
+    const stroke = this.checkStroke(args);
+    try {
+      for (const key of [...stroke.dirty.keys()]) await this.flushDirtyTile(key);
+      await this.buildMips(stroke.version, stroke.changed, [...stroke.regions.values()]);
+      await this.collect();
+      const result = this.describe(stroke.version);
+      this.stroke = null;
+      return result;
+    } catch (error) { await this.abortStroke(); throw error; }
   }
 
-  async abortStroke() {
-    if (this.stroke) this.pending.delete(this.stroke.version.id);
+  async abortStroke({ strokeId } = {}) {
+    if (strokeId !== undefined && this.stroke && strokeId !== this.stroke.id) return;
+    if (this.stroke) {
+      this.pending.delete(this.stroke.version.id);
+      for (const key of [...this.stroke.dirty.keys()]) this.removeDirtyTile(key);
+    }
     this.stroke = null;
     await this.collect();
   }
@@ -396,7 +538,8 @@ export class RasterEngine {
     // Editing/exports use original pixels. Extremely small output still needs a
     // reduced source level to keep a single sampling footprint bounded.
     const reduction = fullResolution ? Math.max(1, 1 / (scale * 32)) : Math.max(1, 1 / scale);
-    const level = Math.min(version.levels.length - 1, Math.max(0, Math.floor(Math.log2(reduction))));
+    const level = this.stroke?.version === version && this.stroke.changed.size
+      ? 0 : Math.min(version.levels.length - 1, Math.max(0, Math.floor(Math.log2(reduction))));
     if (level > 0 && !version.mipsReady) await this.buildMips(version, new Set(version.levels[0].keys()));
     matrix = multiplyTransforms(matrix, [2 ** level, 0, 0, 2 ** level, 0, 0]);
     const inverse = invertTransform(matrix);
@@ -468,6 +611,30 @@ export class RasterEngine {
     finally { releaseCanvas(canvas); }
   }
 
+  async prepareDrawing({ doc, activeLayerId, width, height, view }) {
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width * height > 2 * 1024 * 1024) {
+      throw new Error('The drawing preview exceeds its working memory budget.');
+    }
+    const index = doc.layers.findIndex((layer) => layer.id === activeLayerId);
+    if (index < 0) throw new Error('The drawing layer is unavailable.');
+    const groups = [
+      doc.layers.slice(0, index),
+      [{ ...doc.layers[index], opacity: 100 }],
+      doc.layers.slice(index + 1),
+    ];
+    const bitmaps = [];
+    try {
+      for (const layers of groups) {
+        const { bitmap } = await this.render({ doc: { ...doc, layers }, width, height, view });
+        bitmaps.push(bitmap);
+      }
+      return { bitmaps };
+    } catch (error) {
+      bitmaps.forEach((bitmap) => bitmap.close());
+      throw error;
+    }
+  }
+
   async exportBlob({ doc, format, quality }) {
     const canvas = await this.composite({ doc, fullResolution: true });
     try { return await canvas.convertToBlob({ type: format, quality }); }
@@ -491,6 +658,8 @@ export class RasterEngine {
     this.canceled = true;
     this.stroke = null; this.current = []; this.history = [];
     this.pending.clear(); this.versions.clear(); this.files.clear(); this.cache.clear(); this.bytes = 0;
+    this.dirtyTiles.clear(); this.dirtyBytes = 0;
+    this.cache.setLimit(this.tileMemoryLimit);
     this.inUse.clear(); this.droppedHistory.clear();
     await this.storage.dispose();
   }

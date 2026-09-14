@@ -13,6 +13,7 @@ self.onmessage = ({ data: { id, method, args } }) => {
     if (engine) engine.canceled = true;
   }
   queue = queue.then(async () => {
+    let result;
     try {
       if (method === 'init') {
         engine = new RasterEngine(await createRasterStorage(args.sessionId), (event) => self.postMessage({ event }));
@@ -20,9 +21,12 @@ self.onmessage = ({ data: { id, method, args } }) => {
         if (disposed && method !== 'dispose') throw Object.assign(new Error('Editor was reset.'), { name: 'AbortError' });
         if (!engine || typeof engine[method] !== 'function') throw new Error('Image worker is unavailable.');
       }
-      const result = method === 'init' ? engine.stats() : await engine[method](args);
-      self.postMessage({ id, result, stats: engine.stats() }, result?.bitmap ? [result.bitmap] : []);
+      result = method === 'init' ? engine.stats() : await engine[method](args);
+      const transfer = [result?.bitmap, ...(result?.bitmaps || [])].filter(Boolean);
+      self.postMessage({ id, result, stats: engine.stats() }, transfer);
     } catch (error) {
+      result?.bitmap?.close();
+      result?.bitmaps?.forEach((bitmap) => bitmap.close());
       self.postMessage({ id, error: { name: error.name, message: error.message }, stats: engine?.stats() });
     }
   });

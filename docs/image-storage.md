@@ -8,17 +8,26 @@ Layers contain raster IDs, dimensions, bounds, and transforms. Undo snapshots an
 
 | Resource | Budget / behavior |
 | --- | --- |
-| Decoded tile cache | 48 MiB, LRU eviction |
+| Clean and dirty native tiles together | 80 MiB, clean LRU cache shrinks as dirty tiles grow |
+| Unpersisted stroke tiles | 32 MiB maximum, included in the 80 MiB pool; pressure spills to disk |
 | Tile working surfaces | 16 MiB allowance; source sampling patches are bounded |
+| Live drawing planes | At most 24 MiB including installation; retained planes use at most 18 MiB |
+| Accepted drawing coordinates | 4 MiB including one 64 KiB transferable batch; at most 2,048 stroke headers |
 | Temporary disk data | 2 GiB per editor session, subject to the browser's available quota |
 | Memory-only storage fallback | 256 MiB; a separate limit from the decoded tile cache |
 | Undo | Up to 30 snapshots, sharing unchanged tiles |
 | Waiting pixel operations | One active operation and at most one queued operation |
 | Main canvas | Visible viewport dimensions × device pixel ratio |
 
-The 64 MiB tile-work budget is **not a cap on browser RAM**. Initial image decoding, a full-resolution export surface and its encoder, viewport surfaces, OCR, browser allocators, GPU resources, and filesystem caching require additional memory. Very large imports/exports can still create substantial peaks. Browsers decide when freed allocations are returned to the OS.
+The 96 MiB tile-work budget is **not a cap on browser RAM**. The live drawing planes and coordinate journal have separate limits. Initial image decoding, a full-resolution export surface and its encoder, the main viewport canvas, OCR, browser allocators, GPU resources, and filesystem caching require additional memory. Very large imports/exports can still create substantial peaks. Browsers decide when freed allocations are returned to the OS.
 
-Raw tiles trade disk space for fast reads and exact pixels. Smaller preview levels reduce preview rendering cost. The worker serializes raster work; the display coalesces intermediate redraws. A cold image or a large export may take longer than it did with every original canvas already in RAM.
+Raw tiles trade disk space for fast reads and exact pixels. Smaller preview levels reduce preview rendering cost. A cold image or a large export may take longer than it did with every original canvas already in RAM.
+
+Brush and eraser feedback uses three bounded viewport planes: layers below the active layer, the editable active layer at full opacity, and layers above it. Animation frames apply accepted coordinates directly to the active plane and composite its opacity once. Erasing reveals the lower layers. Source and document clipping remain in effect, including transformed layers. The planes are prepared when the view or active layer changes; input arriving during preparation is buffered.
+
+The worker processes the same strokes in order using original-resolution tiles. Ordinary pointer batches reuse private dirty tiles without disk writes, mip rebuilding, or collection. Finishing a stroke flushes those tiles, rebuilds affected preview levels, and commits the authoritative bounds. The optimistic display stays visible until all accepted strokes are painted and acknowledged. Each stroke gets its own undo step, and new strokes can begin while earlier strokes save. Thumbnails wait until drawing is idle.
+
+Undo/redo, exports, OCR preparation, and changes to the layers, document, tools, or view drain accepted drawing first. Reset cancels immediately. If exceptional storage delay exhausts the coordinate/header budget, the editor shows **Saving strokes—drawing paused** and preserves the accepted prefix. Drawing resumes only after pointer release and after the queue falls below half its limit. Failed persistence reverts the failed stroke and dependent pending strokes, reports their count, and restores the last acknowledged document.
 
 **Calculate sizes** explicitly encodes PNG and JPEG, sequentially. Editing does not continually encode both formats. Changing quality invalidates the JPEG size; changing the composition invalidates both. Download/copy also computes the requested format's size. Only in-flight encodes are shared; encoded exports are not retained as an extra cache. PNG clipboard writes receive a promised Blob during the user click to preserve Safari's user activation.
 
@@ -36,20 +45,41 @@ This is temporary working storage, not project recovery. Reloading starts a new 
 
 Validation used native Chrome 152 and Safari 27 on macOS, not a mocked Canvas renderer. The browser harnesses live in `scripts/browser/` and are excluded from the production bundle.
 
-Final results: **34 Jest tests passed**, production build and ESLint passed, and **12 storage/pixel checks plus 14 editor interaction checks passed in each browser**. Native-resolution PNG output matched the original fixture exactly. Both browsers successfully copied PNG through a real click and recognized both lines of the OCR fixture. Rotated output passed the interior alpha seam check; Safari's alpha differed by 2/255 at one antialiased outer-edge pixel. [Detailed check results](image-storage-validation.json) are recorded alongside the measurements.
+The live drawing revision passes **65 Jest tests**, production build and ESLint. Native Chrome and Safari each pass **12 storage/pixel checks, 14 editor interaction checks, and seven drawing checks with 250 ms of artificial delay on each stroke mutation request**. The drawing checks cover continuous input, 20 rapid independently undoable strokes, new-layer bounds and pointer endpoints, layered erasing, reset during saving, pending-operation barriers, and transformed-layer clipping. Native-resolution PNG output matches the original fixture exactly, including after editing a duplicate. Viewport comparisons permit a one-unit channel rounding difference with a mean difference no greater than 0.001; native PNG comparisons remain exact.
+
+Both browsers also passed native pointer drags before and after OCR, recognized both fixture lines, selected an OCR word, and copied PNG through a native click. Selecting Brush clears the OCR selection overlay and permits drawing again. The earlier storage rollout's [validation results](image-storage-validation.json), including rotation checks, remain available separately; they predate the live drawing revision.
 
 Run `npm run build`, then `npm run test:browser`. The server prints URLs and a temporary directory for JSON results:
 
 - `/engine-check.html`: native pixels, repeated scaling, brush/eraser tile boundaries, crop, alpha/rotation, SVG fallback, simultaneous sessions, forced IndexedDB/memory fallbacks, and disposal.
 - `/?uicheck=all`: upload/paste/drop, move, drawing, undo/redo, duplicate independence, visibility/opacity, crop/resize, explicit sizes, PNG/JPEG/quality, reset during import/stroke, and simulated touch input. Generated fixtures and intercepted downloads keep the check self-contained.
 - `/?uicheck=ocr`: generates a clean text fixture. Click **Run OCR** and inspect the text/overlay. Clipboard copying must also be tested through a real user click; synthetic clicks cannot establish clipboard permission.
+- `/?latencycheck=normal&delayms=250`: click **Ready—click to run tests**, then keep the tab visible and focused until all seven checks finish. Use `&case=continuous` for the five-second 120 Hz stream, or `latencycheck=stress&case=continuous` for the 12-megapixel source and 80-pixel brush. `&autostart=1` skips the start button after foreground checks. `&dpr=1` or `&dpr=2` overrides the app's canvas allocation branch only; reports retain the physical display's native DPR.
 - `/ram-check.html?mode=baseline` and `?mode=tiled`: matching 12-megapixel/30-stroke workloads. Use a fresh tab for each. The baseline comes from commit `194c6a4ea01af99e2ad3eacec5a4242c8ae68970`; `RASTER_BASELINE_REVISION` can override it.
 
 The macOS RSS sampler is `python3 scripts/browser/memory-monitor.py /tmp/browser-memory.jsonl`. It samples once per second. Match the test renderer's PID and timestamps to the workload JSON. Do not sum unrelated tabs into a test result.
 
-### Measured memory and latency
+### Live drawing measurements
 
-The workload imports a 4000 × 3000 image fitted to a 600 × 480 document, applies 30 identical short strokes, retains 30 undo states, waits for a steady reading, exports a 4000 × 3000 PNG, and resets. The preview stays visible. Baseline and tiled variants ran in fresh tabs; Safari reused its existing content/graphics processes. The benchmark exercises the raster pipeline, not the entire React UI or automatic size calculations.
+These are input-dispatch-to-observed-canvas-pixel timings from a five-second stream of 600 points, after view preparation. They measure live feedback separately from worker completion. The stress fixture fits a 4000 × 3000 source into a 600 × 480 document. The delayed runs add 250 ms to each ordered begin/points/finish worker request while using real native Canvas and OPFS storage.
+
+| Workload | Chrome p95 / maximum | Safari p95 / maximum |
+| --- | ---: | ---: |
+| Normal, delayed persistence, native DPR 2 | 19 / 24 ms | 38 / 57 ms |
+| 12-megapixel source, delayed persistence, native DPR 2 | 20.5 / 28.8 ms | 37 / 42 ms |
+| Normal, no artificial delay, app DPR 1 on a DPR 2 display | 22.9 / 29.5 ms | 39 / 64 ms |
+
+All listed streams observed every point. In the stress runs, final persistence still took about 1.1 seconds after pointer release; visible ink continued during that work, and following actions waited for the committed pixels. Combined clean/dirty tile residency stayed at or below 80 MiB, with dirty tiles below 32 MiB.
+
+The harness probes the display through a private 608 × 1 canvas once per animation frame; it does no readback in the input timer. Results record observer CPU time, dispatch drift, frame gaps, focus/visibility changes, and pending work. These are instrumented canvas observations, not physical display scanout or hardware-input timestamps. Background runs or streams stretched by over one second are invalid. Earlier tests that read pixels per input substantially distorted Chrome timing and are excluded. Even the sparse observer overloaded the pre-fix Chrome build, so no Chrome before/after ratio is reported. A valid Safari pre-fix run using the same sparse observer measured a 5,464 ms p95; it demonstrates the old continuous-input starvation rather than a universal speedup ratio.
+
+To compare another build with the same harness, run a second server with `BROWSER_TEST_PORT=4177 BROWSER_TEST_BUILD=/tmp/editor-before-build node scripts/browser/server.cjs`. [Drawing validation results](drawing-latency-validation.json) record the valid runs and baseline limitations.
+
+The repeated 12-megapixel/30-history-state memory workload measured Chrome renderer RSS at about **404 MiB steady and 479 MiB sampled peak**, including export in the peak. Safari reused processes that were still reclaiming allocations from earlier checks, so its current RSS cannot support a clean historical comparison. Both workers stayed below the 80 MiB tile limit and released all owned tile files, stored bytes, versions, and cache bytes on reset. [Current memory measurements](drawing-memory-measurements.json) include process attribution, phase samples, and the Safari warm-process limitation. These native worker workloads exclude the React live drawing planes, whose separate allocation budgets are specified above and covered by controller tests.
+
+### Historical memory and completed-stroke measurements
+
+These measurements predate the live drawing fix. The workload imports a 4000 × 3000 image fitted to a 600 × 480 document, applies 30 identical short strokes, retains 30 undo states, waits for a steady reading, exports a 4000 × 3000 PNG, and resets. The preview stays visible. Baseline and tiled variants ran in fresh tabs; Safari reused its existing content/graphics processes. The benchmark exercises the raster pipeline, not the entire React UI or automatic size calculations. Its completed-stroke times do **not** measure pointer-to-visible latency; waiting for every stroke concealed the continuous-input regression.
 
 | Native process RSS at steady state | Original canvases | Disk-backed tiles |
 | --- | ---: | ---: |

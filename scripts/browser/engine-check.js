@@ -22,7 +22,7 @@ const check = async (name, fn) => {
   document.getElementById('status').textContent = JSON.stringify(results, null, 2);
 };
 const makeClient = async backend => {
-  const bootstrap = backend ? URL.createObjectURL(new Blob([`import '${location.origin}/src/utils/raster.worker.js'; Object.defineProperty(navigator.storage, 'getDirectory', {value: async () => { throw new Error('Disabled for fallback check'); }}); ${backend === 'memory' ? `Object.defineProperty(self, 'indexedDB', {value: undefined});` : ''}`], {
+  const bootstrap = backend ? URL.createObjectURL(new Blob([`import '${window.location.origin}/src/utils/raster.worker.js'; Object.defineProperty(navigator.storage, 'getDirectory', {value: async () => { throw new Error('Disabled for fallback check'); }}); ${backend === 'memory' ? `Object.defineProperty(self, 'indexedDB', {value: undefined});` : ''}`], {
     type: 'text/javascript'
   })) : null;
   const w = new Worker(bootstrap || '/src/utils/raster.worker.js', {
@@ -180,7 +180,7 @@ try {
     assert(compare(original, output).max === 0, 'Resizing discarded pixels');
   });
   await check('Brush crosses tile edges and previous version stays unchanged', async () => {
-    const source = await client.call('beginStroke', {
+    await client.call('beginStroke', {
       layer,
       point: {
         x: 480,
@@ -219,6 +219,9 @@ try {
     return client.stats();
   });
   await check('Eraser, cancel, and crop retain independent pixels', async () => {
+    const brushedBefore = await fromBlob(await client.call('exportBlob', {
+      doc: { ...doc, layers: [changed] }, format: 'image/png', quality: 1
+    }));
     await client.call('beginStroke', {
       layer: changed,
       point: {
@@ -242,6 +245,13 @@ try {
       quality: 1
     }));
     assert(out.getContext('2d').getImageData(512, 305, 1, 1).data[3] === 0, 'Eraser did not clear alpha');
+    const brushedAfter = await fromBlob(await client.call('exportBlob', {
+      doc: { ...doc, layers: [changed] }, format: 'image/png', quality: 1
+    }));
+    const duplicateDiff = compare(brushedBefore, brushedAfter);
+    assert(duplicateDiff.max === 0, 'Erasing a duplicate changed its brushed source: ' + JSON.stringify(duplicateDiff));
+    brushedBefore.width = 1; brushedBefore.height = 1;
+    brushedAfter.width = 1; brushedAfter.height = 1;
     await client.call('beginStroke', {
       layer,
       point: {
@@ -355,6 +365,8 @@ try {
       assert(missing, 'Abandoned files survived startup cleanup');
     } finally { await next.close(); }
   });
+  const fallbackSourceDoc = doc;
+  const fallbackSourceLayer = layer;
   for (const backend of ['indexeddb', 'memory']) await check(backend + ' fallback preserves pixels and disposes its data', async () => {
     const fallback = await makeClient(backend);
     try {
@@ -363,9 +375,9 @@ try {
         blob: await png(original)
       });
       const fallbackDoc = {
-        ...doc,
+        ...fallbackSourceDoc,
         layers: [{
-          ...layer,
+          ...fallbackSourceLayer,
           ...source
         }]
       };

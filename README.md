@@ -9,6 +9,8 @@ Original pixels and undo history use temporary browser storage on the user's dev
 
 Editing uses small image tiles, a bounded cache, and a preview sized to the visible viewport. Large imports and full-resolution exports still need temporary decoding/encoding memory. Choose **Calculate sizes** to encode PNG/JPEG and show their sizes; editing and quality changes no longer encode both formats automatically.
 
+Drawing appears through a bounded live preview while original-resolution strokes save in the background. Rapid strokes keep separate undo steps. Undo, export, and layer/view changes wait for accepted strokes; reset cancels immediately.
+
 See [image storage and browser validation](docs/image-storage.md) for budgets, cleanup behavior, memory measurements, and tradeoffs.
 
 ## SSL Certificates Setup

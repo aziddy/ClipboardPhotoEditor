@@ -9,7 +9,8 @@ const root = path.resolve(__dirname, '../..');
 const resultsDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'clipboard-browser-results-'));
 const baselineRevision = process.env.RASTER_BASELINE_REVISION || '194c6a4ea01af99e2ad3eacec5a4242c8ae68970';
 const port = Number(process.env.BROWSER_TEST_PORT || 4176);
-const assets = new Set(['engine-check.html', 'engine-check.js', 'ram-check.html', 'ram-check.js', 'ui-check.js']);
+const buildDirectory = path.resolve(process.env.BROWSER_TEST_BUILD || path.join(root, 'build'));
+const assets = new Set(['engine-check.html', 'engine-check.js', 'ram-check.html', 'ram-check.js', 'ui-check.js', 'latency-check.js']);
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
 
 http.createServer(async (request, response) => {
@@ -45,13 +46,18 @@ http.createServer(async (request, response) => {
       base = path.join(root, 'src'); relative = url.pathname.slice(5);
       if (!path.extname(relative)) relative += '.js';
     } else {
-      base = path.join(root, 'build'); relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+      base = buildDirectory; relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     }
     const filename = path.resolve(base, relative);
     if (!filename.startsWith(`${base}${path.sep}`)) throw new Error('Invalid path.');
     let data = fs.readFileSync(filename);
     if (url.pathname === '/' && url.searchParams.has('uicheck')) {
       data = data.toString().replace('</body>', '<script type="module" src="/ui-check.js"></script></body>');
+    }
+    if (url.pathname === '/' && url.searchParams.has('latencycheck')) {
+      // A classic script runs before CRA's deferred bundle so delayed-worker
+      // instrumentation also covers the editor's first worker.
+      data = data.toString().replace('<head>', '<head><script src="/latency-check.js"></script>');
     }
     response.setHeader('Content-Type', mime[path.extname(filename)] || 'application/octet-stream');
     response.end(data);
@@ -63,5 +69,7 @@ http.createServer(async (request, response) => {
   console.log(`Editor checks: http://localhost:${port}/?uicheck=all`);
   console.log(`OCR fixture: http://localhost:${port}/?uicheck=ocr`);
   console.log(`RAM workload: http://localhost:${port}/ram-check.html?mode=tiled (or baseline)`);
+  console.log(`Drawing latency: http://localhost:${port}/?latencycheck=normal (or stress; optional &delayms=250&case=continuous)`);
+  console.log('Latency checks require a visible, focused window: click the Ready button, or use &autostart=1 in a foreground window.');
   console.log(`Results: ${resultsDirectory}`);
 });
