@@ -97,6 +97,8 @@ import {
 
 const MIN_DIMENSION = 1;
 const DEFAULT_BRUSH_COLOR = '#ff2b2b';
+const DEFAULT_BRUSH_SIZE = 8;
+const MAX_BRUSH_SIZE = 80;
 const LAYER_DRAG_TYPE = 'application/x-clipboard-photo-layer';
 const VIEW_ZOOM_MIN = 25;
 const VIEW_ZOOM_MAX = 400;
@@ -688,7 +690,7 @@ function UnifiedPhotoEditor() {
 
   const [activeTool, setActiveTool] = useState(TOOLS.MOVE);
   const [brushColor, setBrushColor] = useState(DEFAULT_BRUSH_COLOR);
-  const [brushSize, setBrushSize] = useState(8);
+  const [brushSize, setBrushSize] = useState(DEFAULT_BRUSH_SIZE);
   const [crop, setCrop] = useState(null);
   const [aspectLocked, setAspectLocked] = useState(true);
   const [resizeDraft, setResizeDraft] = useState({ width: 0, height: 0, scale: 100 });
@@ -1109,12 +1111,18 @@ function UnifiedPhotoEditor() {
     const source = await importRasterBlob(client, blob);
     if (!isCurrent()) return;
     const currentDoc = docRef.current;
+    const isNewDocument = !hasDocument(currentDoc);
     const layer = createRasterLayer(source, currentDoc, currentDoc.layers.length + 1);
-    const nextDoc = hasDocument(currentDoc)
-      ? { ...currentDoc, layers: [...currentDoc.layers, layer], activeLayerId: layer.id }
-      : { width: source.sourceWidth, height: source.sourceHeight, layers: [layer], activeLayerId: layer.id };
+    const nextDoc = isNewDocument
+      ? { width: source.sourceWidth, height: source.sourceHeight, layers: [layer], activeLayerId: layer.id }
+      : { ...currentDoc, layers: [...currentDoc.layers, layer], activeLayerId: layer.id };
+    if (isNewDocument) {
+      // Start at 0.5% of the longest edge so large images have visible strokes.
+      const relativeBrushSize = Math.round(Math.max(nextDoc.width, nextDoc.height) * 0.005);
+      setBrushSize(clamp(relativeBrushSize, DEFAULT_BRUSH_SIZE, MAX_BRUSH_SIZE));
+    }
     commitDocument(nextDoc); updateSelectedLayerIds([layer.id]); setCrop(null); setActiveTool(TOOLS.BRUSH);
-    toast({ title: hasDocument(currentDoc) ? 'Layer added' : 'Image loaded', status: 'success', duration: 2200 });
+    toast({ title: isNewDocument ? 'Image loaded' : 'Layer added', status: 'success', duration: 2200 });
   }), [commitDocument, runPixelOperation, toast, updateSelectedLayerIds]);
 
   const handleFiles = useCallback((files) => {
@@ -2370,7 +2378,7 @@ function UnifiedPhotoEditor() {
                       <Text fontSize="sm">Size</Text>
                       <Text fontSize="sm" color="gray.600">{brushSize}px</Text>
                     </HStack>
-                    <Slider value={brushSize} min={1} max={80} onChange={setBrushSize}>
+                    <Slider value={brushSize} min={1} max={MAX_BRUSH_SIZE} onChange={setBrushSize}>
                       <SliderTrack><SliderFilledTrack /></SliderTrack>
                       <SliderThumb />
                     </Slider>

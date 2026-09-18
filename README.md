@@ -13,6 +13,8 @@ Moving, zooming, and changing layer opacity reuse cached source previews within 
 
 Drawing appears through a bounded live preview while original-resolution strokes save in the background. Rapid strokes keep separate undo steps. Undo, export, and layer/view changes wait for accepted strokes; reset cancels immediately.
 
+New documents start with a brush size of 0.5% of the image's longest edge, rounded to whole pixels with an 8px minimum (for example, 20px for a 4000px image). Adjust the size with the slider; your choice stays in place while editing and adding layers.
+
 See [image storage and browser validation](docs/image-storage.md) for budgets, cleanup behavior, memory measurements, and tradeoffs.
 
 ## SSL Certificates Setup
