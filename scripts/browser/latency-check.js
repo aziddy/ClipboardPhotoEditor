@@ -21,7 +21,7 @@
   }
   const dprSuffix = requestedDevicePixelRatio === 1 ? '-dpr-one' : requestedDevicePixelRatio === 2 ? '-dpr-two' : '';
   const mode = params.get('latencycheck') === 'stress' ? 'stress' : 'normal';
-  const cases = ['all', 'continuous', 'rapid', 'blank', 'eraser', 'reset', 'barriers', 'transformed'];
+  const cases = ['all', 'continuous', 'rapid', 'blank', 'eraser', 'reset', 'barriers', 'shortcuts', 'transformed'];
   const selectedCase = cases.includes(params.get('case')) ? params.get('case') : 'all';
   const controls = { delayMs: Math.min(2000, Math.max(0, Number(params.get('delayms')) || 0)), workers: [] };
   const visibilityTransitions = [];
@@ -715,6 +715,66 @@
     } finally { controls.delayMs = previousDelay; }
   };
 
+  const keyboardShortcuts = async () => {
+    await fixture(false);
+    const view = geometry(), previousDelay = controls.delayMs;
+    controls.delayMs = Math.max(250, previousDelay);
+    const first = { x: 120, y: 100 }, second = { x: 120, y: 180 };
+    const before = pixel(view, first);
+    const shortcut = async (redo = false, handled = true) => {
+      const event = new KeyboardEvent('keydown', {
+        key: redo ? 'Z' : 'z', code: 'KeyZ', metaKey: true, shiftKey: redo,
+        bubbles: true, cancelable: true,
+      });
+      // Dispatch where a real keyboard event starts; targeting window would
+      // bypass the editable-target guard and hide the retained-focus bug.
+      document.activeElement.dispatchEvent(event);
+      assert(event.defaultPrevented === handled, handled
+        ? 'Editor ignored the history shortcut' : 'Editor intercepted text-field undo');
+      await frame(); await settled();
+    };
+    const draw = async (point, id) => {
+      pointer(view, 'pointerdown', { x: point.x - 20, y: point.y }, id);
+      pointer(view, 'pointermove', point, id);
+      pointer(view, 'pointerup', { x: point.x + 20, y: point.y }, id);
+      assert(document.activeElement === view.canvas, 'Drawing left focus on the previous control');
+      await frame();
+      assert(editorRoot().dataset.saving === 'true', 'Stroke was not accepted or finished before the pending-undo check');
+    };
+    try {
+      const color = document.querySelector('input[type=color]');
+      color.focus(); setInput(color, '#ff0000'); await frame();
+      assert(document.activeElement === color, 'Color input did not retain focus in the fixture');
+      await draw(first, 90);
+      await shortcut();
+      assert(near(pixel(view, first), before), 'Command-Z did not undo the pending stroke after changing color');
+      await shortcut(true);
+      assert(red(pixel(view, first)), 'Command-Shift-Z did not restore the stroke');
+
+      const name = [...document.querySelectorAll('input')].find((input) => input.value === 'Background');
+      assert(name, 'Layer name input unavailable');
+      name.focus();
+      await shortcut(false, false);
+      assert(red(pixel(view, first)), 'Text-field undo changed image history');
+      await draw(second, 91);
+      await shortcut();
+      assert(near(pixel(view, second), before) && red(pixel(view, first)), 'Undo removed more than the latest stroke');
+      await shortcut();
+      assert(near(pixel(view, first), before), 'Leaving an unchanged name created an extra undo step');
+      await shortcut(true);
+
+      name.focus(); setInput(name, 'Renamed layer'); await frame(); await settled();
+      await draw(second, 92);
+      await shortcut();
+      assert(name.value === 'Renamed layer' && near(pixel(view, second), before) && red(pixel(view, first)), 'Undo lost the rename or an earlier stroke');
+      await shortcut(true);
+      assert(name.value === 'Renamed layer' && red(pixel(view, second)), 'First stroke after renaming was lost');
+      await shortcut(); await shortcut();
+      assert(name.value === 'Background' && red(pixel(view, first)), 'Rename was not a separate undo step');
+      return { summary: { colorFocus: true, unchangedName: true, renamedLayer: true, pendingUndo: true, textUndoNotIntercepted: true, ...observations() } };
+    } finally { controls.delayMs = previousDelay; }
+  };
+
   const run = async () => {
     try {
       await until(() => button('Import'));
@@ -725,6 +785,7 @@
       await check('eraser', 'Live eraser preserves middle-layer opacity and layers above and below', eraserMiddle);
       await check('reset', 'Reset cancels pending stroke persistence and previews', pendingReset);
       await check('barriers', 'Pending drawing survives sizes, export, Undo/Redo, layer selection and view changes', pendingBarriers);
+      await check('shortcuts', 'Drawing restores keyboard undo after color and layer-name inputs', keyboardShortcuts);
       await check('transformed', 'Scaled and rotated live strokes obey native source clipping and saved pixels', transformedClipping);
       assert(results.length > 0, 'Unknown latency case: ' + selectedCase);
     } catch (error) { results.push({ name: 'Harness', passed: false, error: error.stack }); }

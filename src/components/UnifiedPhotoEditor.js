@@ -1191,6 +1191,16 @@ function UnifiedPhotoEditor() {
     return applyChanges();
   }, [commitDocument, runAfterDrawing, setDocumentTransient]);
 
+  const commitLayerName = useCallback((layerId) => {
+    const layer = docRef.current.layers.find((candidate) => candidate.id === layerId);
+    const savedLayer = history[historyIndex]?.layers.find((candidate) => candidate.id === layerId);
+    if (!layer || layer.name === savedLayer?.name) return;
+
+    // A canvas click blurs the name before starting its stroke. Preserve the
+    // prepared drawing preview while committing this metadata-only change.
+    updateLayerMeta(layerId, { name: layer.name });
+  }, [history, historyIndex, updateLayerMeta]);
+
   const addBlankLayer = useCallback(() => runPixelOperation('Could not add layer', async (client, isCurrent) => {
     const currentDoc = docRef.current;
     if (!hasDocument(currentDoc)) return;
@@ -1560,6 +1570,10 @@ function UnifiedPhotoEditor() {
     if (!hasDocument(docRef.current) || busyRef.current || interactionRef.current) return;
 
     event.preventDefault();
+    // preventDefault also prevents the normal focus change. Explicitly leave
+    // inputs (including the color picker) so canvas shortcuts receive the keys.
+    event.currentTarget.focus({ preventScroll: true });
+    if (busyRef.current) return;
     event.currentTarget.setPointerCapture(event.pointerId);
 
     if (isViewPanning) {
@@ -2284,6 +2298,8 @@ function UnifiedPhotoEditor() {
                 <canvas
                   ref={displayCanvasRef}
                   data-editor-display="true"
+                  aria-label="Image editing canvas"
+                  tabIndex={0}
                   onPointerDown={handlePointerDown}
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
@@ -2676,7 +2692,7 @@ function UnifiedPhotoEditor() {
                               size="sm"
                               fontWeight={isActive ? 'semibold' : 'normal'}
                               onChange={(event) => updateLayerMeta(layer.id, { name: event.target.value }, false)}
-                              onBlur={() => runAfterDrawing(() => commitDocument(docRef.current))}
+                              onBlur={() => commitLayerName(layer.id)}
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter') event.currentTarget.blur();
                               }}
