@@ -1,7 +1,7 @@
 # ClipboardPhotoEditor
 Paste or import an image, edit it in one unified canvas, and copy or download the final composition.
 
-The editor supports raster layers, drawing, erasing, cropping, resizing, layer ordering, opacity, visibility, undo, redo, clipboard export, and PNG/JPEG downloads from a single workspace.
+The editor supports image and editable text layers, drawing, erasing, cropping, resizing, layer ordering, opacity, visibility, undo, redo, clipboard export, and PNG/JPEG downloads from a single workspace.
 
 Added images initially fit inside the document while retaining their original pixels. Moving, scaling, rotating, and resizing the document preserve that detail. Brush and eraser edits use the layer's full resolution; cropping removes excluded pixels without downscaling the remaining image. Exports use the document's dimensions. Images can be up to 12,000 pixels on each side.
 
@@ -14,6 +14,10 @@ Moving, zooming, and changing layer opacity reuse cached source previews within 
 Drawing appears through a bounded live preview while original-resolution strokes save in the background. Rapid strokes keep separate undo steps. Undo, export, and layer/view changes wait for accepted strokes; reset cancels immediately.
 
 New documents start with a brush size of 0.5% of the image's longest edge, rounded to whole pixels with an 8px minimum (for example, 20px for a 4000px image). Adjust the size with the slider; your choice stays in place while editing and adding layers.
+
+Choose **Text** (shortcut **T**) after importing an image. Type in the sidebar for centered text, or click the image to place and edit it there. Both editors share the same content and font, size, color, bold, italic, and alignment controls. Enter adds a line; **⌘/Ctrl+Enter** finishes and **Escape** cancels. Each completed edit is one undo step. Select a text layer or double-click it with Move to edit it again.
+
+Text stays editable through moving, scaling, rotating, resizing, and cropping, and renders at the output resolution in PNG/JPEG exports. Cropping clips text to the document without removing its content. Use **Convert to image layer** before brushing or erasing text, or draw on a separate blank layer. Conversion can be undone. Text supports system sans-serif, serif, and monospace fonts, explicit line breaks, and up to 10,000 characters within a 12,000-pixel layout; it does not wrap lines automatically.
 
 See [image storage and browser validation](docs/image-storage.md) for budgets, cleanup behavior, memory measurements, and tradeoffs.
 
@@ -79,10 +83,12 @@ npm run test:browser
 
 Open the printed browser-check URLs. The editor check page generates its own fixtures and intercepts downloads. Use the ordinary editor to manually verify clipboard copying; Safari requires a real user click. These harnesses run only when explicitly opened and are excluded from the production build.
 
+Open `http://localhost:4176/?textcheck` for text editing, undo/cancel, duplicate, crop/resize, conversion, PNG/JPEG, and reset checks.
+
 ## How to use
 
 1. Paste, drop, or import an image to create the document.
 2. Import more images to add them as layers.
-3. Use the toolbar for move, brush, eraser, crop, and resize tools.
+3. Use the toolbar for move, text, brush, eraser, crop, and resize tools.
 4. Use the Layers panel to select, reorder, duplicate, hide, delete, rename, or fade layers.
 5. Copy the composed image to your clipboard or download it as PNG/JPEG.

@@ -1,6 +1,7 @@
 import {
   MAX_DIMENSION, createLayerId, invertTransform, multiplyTransforms, transformPoint,
 } from './editorLayers';
+import { drawTextLayer, isTextLayer } from './textLayers';
 import {
   RasterCache, TILE_SIZE, RASTER_MEMORY_LIMIT, RASTER_DIRTY_LIMIT,
   RASTER_SCRATCH_RESERVE, storageFull,
@@ -132,6 +133,35 @@ export class RasterEngine {
   }
 
   async blank({ width, height }) { return this.describe(this.createVersion(width, height)); }
+
+  async rasterizeText({ layer }) {
+    if (!isTextLayer(layer)) throw new Error('Select a text layer to convert.');
+    const { width, height } = layer.textLayout;
+    if (width > MAX_DIMENSION || height > MAX_DIMENSION) throw new Error('Text exceeds the image size limit.');
+    // Rasterize one tile at a time rather than allocating a potentially huge
+    // temporary bitmap. Keep placement/opacity on the layer, not in its pixels.
+    const version = this.createVersion(width, height);
+    try {
+      const changed = new Set();
+      for (let y = 0; y < height; y += TILE_SIZE) {
+        for (let x = 0; x < width; x += TILE_SIZE) {
+          this.checkCanceled();
+          const canvas = surface(Math.min(TILE_SIZE, width - x), Math.min(TILE_SIZE, height - y));
+          try {
+            const ctx = canvas.getContext('2d');
+            ctx.translate(-x, -y); drawTextLayer(ctx, layer);
+            await this.saveTile(version, 0, x / TILE_SIZE, y / TILE_SIZE, canvas);
+            changed.add(tileKey(x / TILE_SIZE, y / TILE_SIZE));
+          } finally { releaseCanvas(canvas); }
+        }
+      }
+      await this.buildMips(version, changed);
+      return this.describe(version);
+    } catch (error) {
+      this.pending.delete(version.id); this.versions.delete(version.id);
+      await this.collect(); throw error;
+    }
+  }
 
   async readTile(tile) {
     const dirty = this.dirtyTiles.get(tile.id);
@@ -466,6 +496,7 @@ export class RasterEngine {
   }
 
   async beginStroke({ layer, point, size, color, erase, strokeId, sequence = 0 }) {
+    if (isTextLayer(layer)) throw new Error('Convert text to an image layer before drawing on it.');
     if (this.stroke) throw new Error('Finish the current stroke first.');
     if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error('The stroke sequence is invalid.');
     const original = this.version(layer.rasterId);
@@ -576,6 +607,10 @@ export class RasterEngine {
     const created = [];
     try {
       for (const layer of doc.layers) {
+        if (isTextLayer(layer)) {
+          layers.push({ ...layer, transform: multiplyTransforms([1, 0, 0, 1, -crop.x, -crop.y], layer.transform) });
+          continue;
+        }
         const original = this.version(layer.rasterId);
         const version = this.createVersion(original.width, original.height, original);
         created.push(version.id);
@@ -615,6 +650,14 @@ export class RasterEngine {
 
   async renderLayer(ctx, layer, view, width, height, fullResolution) {
     if (!layer.visible || layer.opacity <= 0 || !layer.sourceBounds) return;
+    if (isTextLayer(layer)) {
+      ctx.save();
+      ctx.setTransform(...multiplyTransforms(view, layer.transform));
+      ctx.globalAlpha = Math.max(0, Math.min(1, (layer.opacity ?? 100) / 100));
+      drawTextLayer(ctx, layer);
+      ctx.restore();
+      return;
+    }
     const version = this.version(layer.rasterId);
     let matrix = multiplyTransforms(view, layer.transform);
     const scale = Math.max(Math.hypot(matrix[0], matrix[1]), Math.hypot(matrix[2], matrix[3]));
@@ -679,7 +722,7 @@ export class RasterEngine {
   }
 
   async composite({ doc, width = doc.width, height = doc.height, view = [1, 0, 0, 1, 0, 0], fullResolution = false }) {
-    this.inUse = new Set(doc.layers.map((layer) => layer.rasterId));
+    this.inUse = new Set(doc.layers.map((layer) => layer.rasterId).filter(Boolean));
     this.previewFrameKeys = new Set();
     let canvas;
     try {

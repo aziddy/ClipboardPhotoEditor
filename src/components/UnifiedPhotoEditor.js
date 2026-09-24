@@ -52,6 +52,7 @@ import {
   ScanText,
   SlidersHorizontal,
   Trash2,
+  Type,
   Undo2,
   Upload,
   X,
@@ -64,6 +65,9 @@ import { createLiveDrawing } from '../utils/liveDrawing';
 import { importRasterBlob } from '../utils/rasterImport';
 import { getEditorViewport } from '../utils/editorViewport';
 import { useBrowserOcr } from '../utils/useBrowserOcr';
+import { isTextLayer, textSignature } from '../utils/textLayers';
+import { findTextAtPoint, useTextEditing } from '../utils/useTextEditing';
+import { InlineTextEditor, TextControls } from './TextEditing';
 import {
   MAX_DIMENSION,
   applyLayerTransform,
@@ -112,6 +116,7 @@ const TOOLS = {
   CROP: 'crop',
   RESIZE: 'resize',
   PAN: 'pan',
+  TEXT: 'text',
 };
 
 const TOOL_SHORTCUTS = {
@@ -125,6 +130,7 @@ const TOOL_SHORTCUTS = {
   r: TOOLS.RESIZE,
   5: TOOLS.PAN,
   h: TOOLS.PAN,
+  t: TOOLS.TEXT,
 };
 
 const TRANSFORM_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -469,7 +475,7 @@ const areLayerIdListsEqual = (first, second) => (
   first.length === second.length && first.every((layerId, index) => layerId === second[index])
 );
 
-const getDocumentVisualSignature = (doc) => `${doc.width}x${doc.height}|${doc.layers.map((layer) => [layer.id, layer.rasterId, ...layer.transform, layer.visible, layer.opacity].join(':')).join('|')}`;
+const getDocumentVisualSignature = (doc) => `${doc.width}x${doc.height}|${doc.layers.map((layer) => [layer.id, textSignature(layer), ...layer.transform, layer.visible, layer.opacity].join(':')).join('|')}`;
 
 const reorderLayer = (doc, draggedLayerId, targetLayerId, placement) => {
   if (!draggedLayerId || !targetLayerId || draggedLayerId === targetLayerId) return doc;
@@ -582,6 +588,7 @@ function UnifiedPhotoEditor() {
   const queuedJobsRef = useRef(0);
   const renderQueueRef = useRef({ running: false, latest: null, generation: 0 });
   const liveDrawingRef = useRef(null);
+  const textEditingRef = useRef(null);
   const [drawingState, setDrawingState] = useState({ pending: false, preparing: false, paused: false, queuedStrokes: 0 });
   const [displayRevision, invalidateDisplay] = useReducer((value) => value + 1, 0);
   const [isBusy, setIsBusy] = useState(false);
@@ -621,7 +628,7 @@ function UnifiedPhotoEditor() {
 
   useEffect(() => {
     if (!history.length && !doc.layers.length) return;
-    const rasters = (document) => document.layers.map((layer) => layer.rasterId);
+    const rasters = (document) => document.layers.map((layer) => layer.rasterId).filter(Boolean);
     rasterClientRef.current.call('retain', {
       documents: history.map((document) => ({ key: document.revisionId, rasters: rasters(document) })),
       current: rasters(doc), currentKey: history[historyIndex]?.revisionId,
@@ -629,6 +636,7 @@ function UnifiedPhotoEditor() {
   }, [doc, history, historyIndex]);
 
   const runPixelOperation = useCallback((label, operation, { rethrow = false } = {}) => {
+    textEditingRef.current?.finish();
     // Keep at most one waiting import alongside the active operation. Clipboard
     // Blobs can own substantial memory even before the worker decodes them.
     if (queuedJobsRef.current >= 2) {
@@ -667,8 +675,9 @@ function UnifiedPhotoEditor() {
 
   // Metadata/view actions stay synchronous when idle. If drawing is still being
   // persisted, freeze new input and apply the action to the acknowledged document.
-  const runAfterDrawing = useCallback((operation) => {
+  const runAfterDrawing = useCallback((operation, { commitText = true } = {}) => {
     if (busyRef.current) return;
+    if (commitText) textEditingRef.current?.finish();
     if (!liveDrawingRef.current?.hasWork()) {
       liveDrawingRef.current?.releasePreview();
       return operation();
@@ -809,6 +818,43 @@ function UnifiedPhotoEditor() {
     setTransformDraft(nextDraft);
   }, []);
 
+  const textEditing = useTextEditing({ doc, docRef, onCommit: commitDocument,
+    onPreview: setDocumentTransient, onSelection: updateSelectedLayerIds, selectedLayerIdsRef });
+  textEditingRef.current = textEditing;
+  const finishText = useCallback(() => {
+    textEditingRef.current.finish();
+    setActiveTool(TOOLS.MOVE);
+    displayCanvasRef.current?.focus({ preventScroll: true });
+  }, []);
+  const cancelText = useCallback(() => {
+    textEditingRef.current.cancel();
+    setActiveTool(TOOLS.MOVE);
+    displayCanvasRef.current?.focus({ preventScroll: true });
+  }, []);
+  const handleTextKeyDown = useCallback((event) => {
+    if (event.nativeEvent?.isComposing || event.isComposing) return;
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); cancelText();
+    } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault(); event.stopPropagation(); finishText();
+    }
+  }, [cancelText, finishText]);
+  const startText = useCallback((layerId = null, point = null, inline = false) => runAfterDrawing(() => {
+    resetTransformDraft();
+    setActiveTool(TOOLS.TEXT);
+    textEditingRef.current.begin(layerId, point, inline);
+  }), [resetTransformDraft, runAfterDrawing]);
+  const convertText = useCallback(() => runPixelOperation('Could not convert text', async (client, isCurrent) => {
+    const currentDoc = docRef.current;
+    const layer = getActiveLayer(currentDoc);
+    if (!isTextLayer(layer)) return;
+    const source = await client.call('rasterizeText', { layer });
+    if (!isCurrent()) return;
+    const { type, text, textLayout, ...properties } = layer;
+    commitDocument(updateLayer(currentDoc, layer.id, () => ({ ...properties, ...source })));
+    setActiveTool(TOOLS.MOVE);
+  }), [commitDocument, runPixelOperation]);
+
   const getViewBounds = useCallback((
     targetZoom = viewZoomRef.current,
     renderedZoom = viewZoomRef.current
@@ -932,13 +978,23 @@ function UnifiedPhotoEditor() {
 
   const chooseTool = useCallback((nextTool) => {
     const isDrawingTool = (tool) => tool === TOOLS.BRUSH || tool === TOOLS.ERASER;
+    if (nextTool === TOOLS.TEXT) {
+      cancelOcr(); clearOcr();
+      const layer = getActiveLayer(docRef.current);
+      startText(isTextLayer(layer) ? layer.id : null);
+      return;
+    }
+    if (isDrawingTool(nextTool) && isTextLayer(getActiveLayer(docRef.current))) {
+      toast({ title: 'Text is still editable', description: 'Convert it to an image layer to brush or erase it, or add a blank layer for drawing.', status: 'info', duration: 4000 });
+      return;
+    }
     if (isDrawingTool(nextTool)) { cancelOcr(); clearOcr(); }
     if (isDrawingTool(activeTool) && isDrawingTool(nextTool)) {
       setActiveTool(nextTool);
     } else {
       runAfterDrawing(() => setActiveTool(nextTool));
     }
-  }, [activeTool, cancelOcr, clearOcr, runAfterDrawing]);
+  }, [activeTool, cancelOcr, clearOcr, runAfterDrawing, startText, toast]);
 
   const renderDisplay = useCallback((renderDoc = doc) => {
     const canvas = displayCanvasRef.current;
@@ -946,13 +1002,16 @@ function UnifiedPhotoEditor() {
     const isGroupMove = activeTool === TOOLS.MOVE && hasMultiLayerSelection;
     const draft = isGroupMove ? getTranslationDraft(transformDraft) : transformDraft;
     const ids = new Set(isGroupMove ? selectedMoveLayers.map((layer) => layer.id) : activeTool === TOOLS.MOVE ? [renderDoc.activeLayerId] : []);
-    const drawingDoc = { ...renderDoc, layers: renderDoc.layers.map((layer) => ids.has(layer.id) ? applyLayerTransform(layer, draft) : layer) };
+    const drawingDoc = { ...renderDoc, layers: renderDoc.layers.map((layer) => {
+      if (textEditing.session?.inline && layer.id === textEditing.session.layerId) return { ...layer, visible: false };
+      return ids.has(layer.id) ? applyLayerTransform(layer, draft) : layer;
+    }) };
     const view = getEditorViewport({ width: displayWidth, height: displayHeight }, viewportSize.width, viewportSize.height, viewZoom, viewOffset, window.devicePixelRatio || 1);
     const matrix = multiplyTransforms(view.matrix, [displayWidth / renderDoc.width, 0, 0, displayHeight / renderDoc.height, 0, 0]);
     const queue = renderQueueRef.current;
     const generation = ++queue.generation;
     const epoch = editorEpochRef.current;
-    if ((activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) && !isSpacePanning && !busyRef.current) {
+    if ((activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) && !isTextLayer(getActiveLayer(renderDoc)) && !isSpacePanning && !busyRef.current) {
       queue.latest = null;
       liveDrawingRef.current.prepare({ doc: renderDoc, activeLayerId: renderDoc.activeLayerId,
         width: view.pixelWidth, height: view.pixelHeight, view: matrix,
@@ -991,7 +1050,7 @@ function UnifiedPhotoEditor() {
       } finally { queue.running = false; }
     };
     drain();
-  }, [activeLayer, activeTool, displayHeight, displayWidth, doc, documentVisualSignature, hasMultiLayerSelection, isSpacePanning, selectedMoveLayers, toast, transformDraft, viewportSize, viewOffset, viewZoom]);
+  }, [activeLayer, activeTool, displayHeight, displayWidth, doc, documentVisualSignature, hasMultiLayerSelection, isSpacePanning, selectedMoveLayers, textEditing.session, toast, transformDraft, viewportSize, viewOffset, viewZoom]);
 
   useEffect(() => { renderDisplay(); }, [displayRevision, renderDisplay]);
 
@@ -1076,7 +1135,7 @@ function UnifiedPhotoEditor() {
   }, [documentHeight, documentLayerCount, documentWidth, resetView]);
 
   useEffect(() => {
-    const clampOffsetToViewport = () => runAfterDrawing(() => updateViewOffset((current) => current));
+    const clampOffsetToViewport = () => runAfterDrawing(() => updateViewOffset((current) => current), { commitText: false });
 
     clampOffsetToViewport();
     window.addEventListener('resize', clampOffsetToViewport);
@@ -1299,6 +1358,7 @@ function UnifiedPhotoEditor() {
     const currentDoc = docRef.current;
     const layer = getActiveLayer(currentDoc);
     const point = getCanvasPoint(event, false);
+    if (isTextLayer(layer)) return;
     if (!layer || !point || point.x < 0 || point.y < 0 || point.x > currentDoc.width || point.y > currentDoc.height) return;
     if (!layer.visible) { toast({ title: 'Layer hidden', description: 'Make the active layer visible before drawing on it.', status: 'info' }); return; }
     if (liveDrawingRef.current.begin({ layerId: layer.id, point, size: brushSize, color: brushColor,
@@ -1574,6 +1634,12 @@ function UnifiedPhotoEditor() {
     // inputs (including the color picker) so canvas shortcuts receive the keys.
     event.currentTarget.focus({ preventScroll: true });
     if (busyRef.current) return;
+    if (activeTool === TOOLS.TEXT && !isViewPanning) {
+      const point = getCanvasPoint(event, false);
+      const currentDoc = docRef.current;
+      if (point && point.x >= 0 && point.y >= 0 && point.x <= currentDoc.width && point.y <= currentDoc.height) textEditingRef.current.place(point);
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
 
     if (isViewPanning) {
@@ -1594,7 +1660,14 @@ function UnifiedPhotoEditor() {
     if (activeTool === TOOLS.MOVE) {
       startMoveInteraction(event);
     }
-  }, [activeTool, isViewPanning, startCropInteraction, startMoveInteraction, startPanInteraction, startStroke]);
+  }, [activeTool, getCanvasPoint, isViewPanning, startCropInteraction, startMoveInteraction, startPanInteraction, startStroke]);
+
+  const handleCanvasDoubleClick = useCallback((event) => {
+    if (activeTool !== TOOLS.MOVE || busyRef.current) return;
+    const point = getCanvasPoint(event, false);
+    const layer = point && findTextAtPoint(docRef.current, point);
+    if (layer) startText(layer.id, null, true);
+  }, [activeTool, getCanvasPoint, startText]);
 
   const handlePointerMove = useCallback((event) => {
     const interaction = interactionRef.current;
@@ -1778,6 +1851,7 @@ function UnifiedPhotoEditor() {
   }, [handleCopySelectedOcrText, selectedOcrText]);
 
   const resetEditor = useCallback(() => {
+    textEditingRef.current?.cancel();
     editorEpochRef.current += 1;
     liveDrawingRef.current.reset();
     if (displayCanvasRef.current) {
@@ -1843,10 +1917,15 @@ function UnifiedPhotoEditor() {
   }, []);
 
   const selectLayer = useCallback((layerId, options = {}) => runAfterDrawing(() => {
-    const { replaceSelection = true } = options;
+    const { replaceSelection = true, editText = true } = options;
     dispatch({ type: 'selectLayer', layerId });
     if (replaceSelection) {
       updateSelectedLayerIds([layerId]);
+    }
+    const layer = docRef.current.layers.find((candidate) => candidate.id === layerId);
+    if (isTextLayer(layer) && editText) {
+      setActiveTool(TOOLS.TEXT);
+      textEditingRef.current.begin(layerId);
     }
   }), [runAfterDrawing, updateSelectedLayerIds]);
 
@@ -1878,7 +1957,7 @@ function UnifiedPhotoEditor() {
       return;
     }
 
-    selectLayer(layerId);
+    selectLayer(layerId, { editText: !event.target.closest('input') });
   }, [selectLayer, toggleLayerSelection]);
 
   const handleLayerDragStart = useCallback((event, layerId) => {
@@ -2035,6 +2114,7 @@ function UnifiedPhotoEditor() {
     if (isViewPanning) return 'grab';
     if (activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) return 'crosshair';
     if (activeTool === TOOLS.CROP) return 'crosshair';
+    if (activeTool === TOOLS.TEXT) return 'text';
     if (activeTool === TOOLS.MOVE) return 'move';
     return 'default';
   }, [activeTool, isViewDragging, isViewPanning]);
@@ -2064,6 +2144,10 @@ function UnifiedPhotoEditor() {
       }}
       onPointerDownCapture={(event) => {
         if (busyRef.current && !event.target.closest('canvas, [data-editor-reset]')) { event.preventDefault(); event.stopPropagation(); }
+        else if (!event.target.closest('canvas, [data-text-editor], [data-editor-reset]')) textEditingRef.current?.finish();
+      }}
+      onFocusCapture={(event) => {
+        if (!event.target.closest('canvas, [data-text-editor], [data-editor-reset]')) textEditingRef.current?.finish();
       }}
       onClickCapture={(event) => {
         if (busyRef.current && !event.target.closest('[data-editor-reset]')) { event.preventDefault(); event.stopPropagation(); }
@@ -2208,6 +2292,7 @@ function UnifiedPhotoEditor() {
             <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => chooseTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => chooseTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => chooseTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Type} label="Text" isActive={activeTool === TOOLS.TEXT} onClick={() => chooseTool(TOOLS.TEXT)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => chooseTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => chooseTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
           </HStack>
@@ -2226,6 +2311,7 @@ function UnifiedPhotoEditor() {
             <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => chooseTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => chooseTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => chooseTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
+            <ToolButton icon={Type} label="Text" isActive={activeTool === TOOLS.TEXT} onClick={() => chooseTool(TOOLS.TEXT)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => chooseTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
             <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => chooseTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
 
@@ -2304,9 +2390,16 @@ function UnifiedPhotoEditor() {
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
                   onPointerCancel={handlePointerUp}
+                  onDoubleClick={handleCanvasDoubleClick}
                   style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', cursor: toolCursor, touchAction: 'none' }}
                 />
                 {activeTool === TOOLS.CROP && <CropOverlay doc={doc} crop={crop} viewport={viewport} />}
+
+                {textEditing.session?.inline && textEditing.layer && (
+                  <InlineTextEditor layer={textEditing.layer}
+                    matrix={multiplyTransforms([viewport.scale, 0, 0, viewport.scale, viewport.x, viewport.y], textEditing.layer.transform)}
+                    onChange={textEditing.update} onKeyDown={handleTextKeyDown} />
+                )}
 
                 {ocrWords.length > 0 && (
                   <Box
@@ -2373,6 +2466,19 @@ function UnifiedPhotoEditor() {
 
               {!hasDocument(doc) && (
                 <Text color="gray.600" fontSize="sm">Import an image to enable the editor tools.</Text>
+              )}
+
+              {hasDocument(doc) && activeTool === TOOLS.TEXT && (
+                <TextControls editing={textEditing} onDone={finishText} onCancel={cancelText}
+                  canEdit={isTextLayer(activeLayer)} onEdit={() => startText(activeLayer.id)}
+                  onNew={() => startText()} onConvert={convertText} onKeyDown={handleTextKeyDown} />
+              )}
+              {isTextLayer(activeLayer) && activeTool !== TOOLS.TEXT && (
+                <VStack align="stretch" spacing={2} mb={3}>
+                  <Button size="sm" onClick={() => startText(activeLayer.id)}>Edit text</Button>
+                  <Button size="sm" variant="outline" onClick={convertText}>Convert to image layer</Button>
+                  <Text fontSize="xs" color="gray.600">Convert to brush or erase this text, or draw on a separate blank layer.</Text>
+                </VStack>
               )}
 
               {hasDocument(doc) && (activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) && (
@@ -2689,6 +2795,7 @@ function UnifiedPhotoEditor() {
                           <Box flex={1} minW={0}>
                             <Input
                               value={layer.name}
+                              aria-label={`Layer name: ${layer.name}`}
                               size="sm"
                               fontWeight={isActive ? 'semibold' : 'normal'}
                               onChange={(event) => updateLayerMeta(layer.id, { name: event.target.value }, false)}
@@ -2697,6 +2804,7 @@ function UnifiedPhotoEditor() {
                                 if (event.key === 'Enter') event.currentTarget.blur();
                               }}
                             />
+                            {isTextLayer(layer) && <Badge fontSize="xs" colorScheme="purple">Text</Badge>}
                             <HStack mt={2} spacing={2}>
                               <Tooltip label={layer.visible ? 'Hide layer' : 'Show layer'} hasArrow>
                                 <IconButton

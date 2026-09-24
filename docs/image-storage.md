@@ -4,6 +4,8 @@ The unified editor keeps original-resolution pixels in immutable 512 × 512 RGBA
 
 Layers contain raster IDs, dimensions, bounds, and transforms. Undo snapshots and duplicated layers share tile references. Brush/eraser edits replace affected tiles; cropping shares interior tiles, removes excluded tiles, and rewrites boundary tiles. Transforming or resizing changes metadata. Full-resolution source pixels remain available when a fitted layer is enlarged later.
 
+Editable text layers contain text, typography, measured line layout, bounds, and a transform instead of a raster ID. The worker draws them directly with Canvas 2D at the preview, export, or OCR resolution. Text edits share one undo snapshot per finished session. Crop translates text and clips it to the document while retaining its editable content. Explicit conversion creates native tiles one at a time; undo restores the text metadata. Text metadata is limited to 10,000 characters and a 12,000-pixel layout on each side.
+
 ## Budgets and tradeoffs
 
 | Resource | Budget / behavior |

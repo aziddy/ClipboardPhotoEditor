@@ -1,3 +1,5 @@
+import { drawTextLayer, isTextLayer } from './textLayers';
+
 export const HISTORY_LIMIT = 30;
 export const MAX_DIMENSION = 12000;
 
@@ -49,6 +51,11 @@ const cloneCanvas = (source) => {
 export const cloneLayer = (layer) => ({
   ...layer,
   transform: [...layer.transform],
+  ...(isTextLayer(layer) ? {
+    text: { ...layer.text },
+    textLayout: { ...layer.textLayout, lines: [...layer.textLayout.lines] },
+    sourceBounds: { ...layer.sourceBounds },
+  } : {}),
 });
 
 export const cloneDocument = (doc) => ({
@@ -206,7 +213,7 @@ const getBoundsFromPoints = (points) => {
 };
 
 export const getLayerDocumentBounds = (layer) => {
-  const bounds = layer.rasterId ? layer.sourceBounds : getLayerBounds(layer.canvas);
+  const bounds = layer.rasterId || isTextLayer(layer) ? layer.sourceBounds : getLayerBounds(layer.canvas);
   if (!bounds) return null;
   const { x, y, width, height } = bounds;
   return getBoundsFromPoints([
@@ -324,7 +331,8 @@ export const renderLayer = (ctx, layer, transformDraft = null, resizeScale = nul
   ctx.imageSmoothingQuality = 'high';
   if (resizeScale) ctx.scale(resizeScale.x, resizeScale.y);
   ctx.transform(...transformedLayer.transform);
-  ctx.drawImage(layer.canvas, 0, 0);
+  if (isTextLayer(layer)) drawTextLayer(ctx, layer);
+  else ctx.drawImage(layer.canvas, 0, 0);
   ctx.restore();
 };
 
@@ -373,6 +381,7 @@ export const cropFromEdges = (left, top, right, bottom, doc) => {
 export const cropDocument = (doc, crop) => {
   const safeCrop = cropFromEdges(crop.x, crop.y, crop.x + crop.width, crop.y + crop.height, doc);
   const layers = doc.layers.map((layer) => {
+    if (isTextLayer(layer)) return translateLayer(layer, -safeCrop.x, -safeCrop.y);
     const canvas = createCanvas(layer.canvas.width, layer.canvas.height);
     const ctx = canvas.getContext('2d');
     ctx.save();
