@@ -1252,18 +1252,53 @@ function UnifiedPhotoEditor() {
     event.target.value = '';
   }, [handleFiles]);
 
+  const insertLayerCopy = useCallback((layer) => {
+    const currentDoc = docRef.current;
+    const index = currentDoc.layers.findIndex((candidate) => candidate.id === layer.id);
+    const duplicate = {
+      ...cloneLayer(layer),
+      id: createLayerId(),
+      name: `${layer.name} copy`,
+    };
+    const layers = [...currentDoc.layers];
+    // Place the copy above its source, or on top if the source is gone.
+    layers.splice(index === -1 ? layers.length : index + 1, 0, duplicate);
+    commitDocument({
+      ...currentDoc,
+      layers,
+      activeLayerId: duplicate.id,
+    });
+    updateSelectedLayerIds([duplicate.id]);
+  }, [commitDocument, updateSelectedLayerIds]);
+
+  // Copying a text layer only writes its plain text to the clipboard, so a paste
+  // whose text still matches pastes the remembered layer back.
+  const copiedTextLayerRef = useRef(null);
+
   const handlePaste = useCallback((event) => {
     const items = event.clipboardData?.items;
     if (!items) return;
 
     const imageItem = Array.from(items).find((item) => item.type.startsWith('image/'));
-    if (!imageItem) return;
+    if (!imageItem) {
+      const copiedLayer = copiedTextLayerRef.current;
+      const text = event.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n');
+      if (!copiedLayer || text !== copiedLayer.text.value) return;
+      if (isEditableShortcutTarget(event.target) || !hasDocument(docRef.current)) return;
+
+      event.preventDefault();
+      runAfterDrawing(() => {
+        insertLayerCopy(copiedLayer);
+        setActiveTool(TOOLS.MOVE);
+      });
+      return;
+    }
 
     event.preventDefault();
     const blob = imageItem.getAsFile();
     if (!blob) return;
     importImageBlob(blob);
-  }, [importImageBlob]);
+  }, [importImageBlob, insertLayerCopy, runAfterDrawing]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
@@ -1318,25 +1353,9 @@ function UnifiedPhotoEditor() {
   }), [commitDocument, runPixelOperation, updateSelectedLayerIds]);
 
   const duplicateActiveLayer = useCallback(() => runAfterDrawing(() => {
-    const currentDoc = docRef.current;
-    const layer = getActiveLayer(currentDoc);
-    if (!layer) return;
-
-    const index = currentDoc.layers.findIndex((candidate) => candidate.id === layer.id);
-    const duplicate = {
-      ...cloneLayer(layer),
-      id: createLayerId(),
-      name: `${layer.name} copy`,
-    };
-    const layers = [...currentDoc.layers];
-    layers.splice(index + 1, 0, duplicate);
-    commitDocument({
-      ...currentDoc,
-      layers,
-      activeLayerId: duplicate.id,
-    });
-    updateSelectedLayerIds([duplicate.id]);
-  }), [commitDocument, runAfterDrawing, updateSelectedLayerIds]);
+    const layer = getActiveLayer(docRef.current);
+    if (layer) insertLayerCopy(layer);
+  }), [insertLayerCopy, runAfterDrawing]);
 
   const deleteActiveLayer = useCallback(() => runAfterDrawing(() => {
     const currentDoc = docRef.current;
@@ -1885,19 +1904,46 @@ function UnifiedPhotoEditor() {
     }
   }, [selectedOcrText, toast]);
 
+  const handleCopyTextLayer = useCallback(async (layer) => {
+    try {
+      await navigator.clipboard.writeText(layer.text.value);
+      copiedTextLayerRef.current = layer;
+      toast({
+        title: 'Text layer copied',
+        description: 'Paste to add a copy, or paste the text into another app.',
+        status: 'success',
+        duration: 2600,
+        isClosable: true,
+      });
+    } catch (err) {
+      toast({
+        title: 'Copy failed',
+        description: 'Could not copy the text layer to the clipboard.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    }
+  }, [toast]);
+
   useEffect(() => {
     const handleCopyShortcut = (event) => {
       if (isEditableShortcutTarget(event.target)) return;
       if ((!event.metaKey && !event.ctrlKey) || event.altKey) return;
-      if (event.key.toLowerCase() !== 'c' || !selectedOcrText.trim()) return;
+      if (event.key.toLowerCase() !== 'c') return;
 
-      event.preventDefault();
-      handleCopySelectedOcrText();
+      if (selectedOcrText.trim()) {
+        event.preventDefault();
+        handleCopySelectedOcrText();
+      } else if (activeTool === TOOLS.MOVE && !hasMultiLayerSelection && isTextLayer(activeLayer) && activeLayer.text.value) {
+        event.preventDefault();
+        handleCopyTextLayer(activeLayer);
+      }
     };
 
     window.addEventListener('keydown', handleCopyShortcut);
     return () => window.removeEventListener('keydown', handleCopyShortcut);
-  }, [handleCopySelectedOcrText, selectedOcrText]);
+  }, [activeLayer, activeTool, handleCopySelectedOcrText, handleCopyTextLayer, hasMultiLayerSelection, selectedOcrText]);
 
   const resetEditor = useCallback(() => {
     textEditingRef.current?.cancel();
