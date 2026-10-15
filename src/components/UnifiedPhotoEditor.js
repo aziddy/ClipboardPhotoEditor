@@ -82,6 +82,7 @@ import {
   multiplyTransforms,
   cropFromEdges,
   editorReducer,
+  findLayerAtPoint,
   getActiveLayer,
   getDraftRotation,
   getDraftScaleX,
@@ -842,6 +843,16 @@ function UnifiedPhotoEditor() {
     setTransformDraft(nextDraft);
   }, []);
 
+  // Leaves no layer active so the next canvas click can pick any layer.
+  const releaseLayerSelection = useCallback(() => runAfterDrawing(() => {
+    const currentDoc = docRef.current;
+    if (!currentDoc.activeLayerId && selectedLayerIdsRef.current.length === 0) return;
+    interactionRef.current = null;
+    resetTransformDraft();
+    setDocumentTransient({ ...currentDoc, activeLayerId: null });
+    updateSelectedLayerIds([]);
+  }), [resetTransformDraft, runAfterDrawing, setDocumentTransient, updateSelectedLayerIds]);
+
   const textEditing = useTextEditing({ doc, docRef, onCommit: commitDocument,
     onPreview: setDocumentTransient, onSelection: updateSelectedLayerIds, selectedLayerIdsRef });
   textEditingRef.current = textEditing;
@@ -1021,6 +1032,10 @@ function UnifiedPhotoEditor() {
       toast({ title: 'Text is still editable', description: 'Convert it to an image layer to brush or erase it, or add a blank layer for drawing.', status: 'info', duration: 4000 });
       return;
     }
+    if (isDrawingTool(nextTool) && hasDocument(docRef.current) && !getActiveLayer(docRef.current)) {
+      toast({ title: 'No layer selected', description: 'Select a layer to draw on.', status: 'info', duration: 4000 });
+      return;
+    }
     if (isDrawingTool(nextTool)) { cancelOcr(); clearOcr(); }
     if (isDrawingTool(activeTool) && isDrawingTool(nextTool)) {
       setActiveTool(nextTool);
@@ -1044,7 +1059,8 @@ function UnifiedPhotoEditor() {
     const queue = renderQueueRef.current;
     const generation = ++queue.generation;
     const epoch = editorEpochRef.current;
-    if ((activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) && !isTextLayer(getActiveLayer(renderDoc)) && !isSpacePanning && !busyRef.current) {
+    const drawingLayer = getActiveLayer(renderDoc);
+    if ((activeTool === TOOLS.BRUSH || activeTool === TOOLS.ERASER) && drawingLayer && !isTextLayer(drawingLayer) && !isSpacePanning && !busyRef.current) {
       queue.latest = null;
       liveDrawingRef.current.prepare({ doc: renderDoc, activeLayerId: renderDoc.activeLayerId,
         width: view.pixelWidth, height: view.pixelHeight, view: matrix,
@@ -1556,15 +1572,25 @@ function UnifiedPhotoEditor() {
       return;
     }
 
-    const layer = getActiveLayer(currentDoc);
-    if (!layer) return;
+    let layer = getActiveLayer(currentDoc);
+    const isNewSelection = !layer;
+    if (isNewSelection) {
+      layer = findLayerAtPoint(currentDoc, point);
+      if (!layer) return;
+    }
 
     const startGeometry = getTransformedGeometry(layer, startDraft);
     const baseBounds = getLayerDocumentBounds(layer);
     if (!startGeometry || !baseBounds) return;
 
-    const hit = getTransformHit(point, startGeometry, tolerance);
+    // With nothing selected (after Escape) the click selects the layer under
+    // the pointer, and the same gesture can already drag it.
+    const hit = isNewSelection ? { action: 'move' } : getTransformHit(point, startGeometry, tolerance);
     if (!hit) return;
+    if (isNewSelection) {
+      setDocumentTransient({ ...currentDoc, activeLayerId: layer.id });
+      updateSelectedLayerIds([layer.id]);
+    }
 
     interactionRef.current = {
       type: 'move',
@@ -1577,7 +1603,7 @@ function UnifiedPhotoEditor() {
       baseBounds,
       startAngle: getAngleFromCenter(startGeometry.center, point),
     };
-  }, [getCanvasPoint]);
+  }, [getCanvasPoint, setDocumentTransient, updateSelectedLayerIds]);
 
   const continueMoveInteraction = useCallback((event) => {
     const interaction = interactionRef.current;
@@ -1944,6 +1970,23 @@ function UnifiedPhotoEditor() {
     window.addEventListener('keydown', handleCopyShortcut);
     return () => window.removeEventListener('keydown', handleCopyShortcut);
   }, [activeLayer, activeTool, handleCopySelectedOcrText, handleCopyTextLayer, hasMultiLayerSelection, selectedOcrText]);
+
+  useEffect(() => {
+    if (activeTool !== TOOLS.MOVE) return undefined;
+
+    const handleEscape = (event) => {
+      if (event.key !== 'Escape' || busyRef.current || isEditableShortcutTarget(event.target)) return;
+      const currentDoc = docRef.current;
+      if (!hasDocument(currentDoc)) return;
+      if (!currentDoc.activeLayerId && selectedLayerIdsRef.current.length === 0) return;
+
+      event.preventDefault();
+      releaseLayerSelection();
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [activeTool, releaseLayerSelection]);
 
   const resetEditor = useCallback(() => {
     textEditingRef.current?.cancel();
@@ -2653,12 +2696,16 @@ function UnifiedPhotoEditor() {
                 <VStack align="stretch" spacing={4}>
                   {hasMultiLayerSelection ? (
                     <Text fontSize="sm" color="gray.600">
-                      {selectedMoveLayers.length} layers selected. Drag inside the group box to move them together.
+                      {selectedMoveLayers.length} layers selected. Drag inside the group box to move them together. Press Esc to deselect.
+                    </Text>
+                  ) : !activeLayer ? (
+                    <Text fontSize="sm" color="gray.600">
+                      Click a layer to select it.
                     </Text>
                   ) : (
                     <>
                       <Text fontSize="sm" color="gray.600">
-                        Drag inside the box to move, drag handles to resize, and drag just outside the box to rotate.
+                        Drag inside the box to move, drag handles to resize, and drag just outside the box to rotate. Press Esc to deselect.
                       </Text>
                       <Box>
                         <HStack justify="space-between" mb={2}>

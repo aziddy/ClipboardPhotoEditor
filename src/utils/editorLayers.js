@@ -212,8 +212,13 @@ const getBoundsFromPoints = (points) => {
   };
 };
 
+// Opaque content bounds in the layer's own (source bitmap) coordinates.
+export const getLayerSourceBounds = (layer) => (
+  layer.rasterId || isTextLayer(layer) ? layer.sourceBounds : getLayerBounds(layer.canvas)
+);
+
 export const getLayerDocumentBounds = (layer) => {
-  const bounds = layer.rasterId || isTextLayer(layer) ? layer.sourceBounds : getLayerBounds(layer.canvas);
+  const bounds = getLayerSourceBounds(layer);
   if (!bounds) return null;
   const { x, y, width, height } = bounds;
   return getBoundsFromPoints([
@@ -221,6 +226,16 @@ export const getLayerDocumentBounds = (layer) => {
     { x: x + width, y: y + height }, { x, y: y + height },
   ].map((point) => transformPoint(layer.transform, point)));
 };
+
+// Topmost visible layer whose content contains the document point.
+export const findLayerAtPoint = (doc, point, predicate = () => true) => [...doc.layers].reverse().find((layer) => {
+  if (!layer.visible || layer.opacity <= 0 || !predicate(layer)) return false;
+  const bounds = getLayerSourceBounds(layer);
+  if (!bounds) return false;
+  const local = transformPoint(invertTransform(layer.transform), point);
+  return local.x >= bounds.x && local.y >= bounds.y &&
+    local.x <= bounds.x + bounds.width && local.y <= bounds.y + bounds.height;
+});
 
 export const getLayerGroupBounds = (layers) => {
   const bounds = layers.map(getLayerDocumentBounds).filter(Boolean);

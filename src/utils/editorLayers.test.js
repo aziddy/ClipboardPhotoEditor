@@ -10,6 +10,7 @@ import {
   createLayer,
   cropDocument,
   editorReducer,
+  findLayerAtPoint,
   finishLayerStroke,
   getLayerBounds,
   getLayerDocumentBounds,
@@ -276,4 +277,21 @@ test('inverse coordinates remain accurate after rotation combined with nonunifor
   const roundTrip = transformPoint(invertTransform(matrix), transformPoint(matrix, sourcePoint));
   expect(roundTrip.x).toBeCloseTo(sourcePoint.x, 9);
   expect(roundTrip.y).toBeCloseTo(sourcePoint.y, 9);
+});
+
+test('canvas hit testing picks the topmost visible layer under a document point', () => {
+  const [background, image] = addLargeImage(makeDocument()).layers;
+  // The fitted image spans the document; shifted right it covers x 300-900.
+  const doc = { ...makeDocument(), layers: [background, translateLayer(image, 300, 0)] };
+
+  expect(findLayerAtPoint(doc, { x: 400, y: 100 }).id).toBe(image.id);
+  expect(findLayerAtPoint(doc, { x: 100, y: 100 }).id).toBe(background.id);
+  expect(findLayerAtPoint(doc, { x: 950, y: 100 })).toBeUndefined();
+
+  const hidden = { ...doc, layers: [background, { ...doc.layers[1], visible: false }] };
+  expect(findLayerAtPoint(hidden, { x: 400, y: 100 }).id).toBe(background.id);
+  const transparent = { ...doc, layers: [background, { ...doc.layers[1], opacity: 0 }] };
+  expect(findLayerAtPoint(transparent, { x: 400, y: 100 }).id).toBe(background.id);
+  const onlyBackground = (layer) => layer.id === background.id;
+  expect(findLayerAtPoint(doc, { x: 400, y: 100 }, onlyBackground).id).toBe(background.id);
 });

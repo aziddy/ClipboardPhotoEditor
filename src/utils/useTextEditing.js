@@ -1,12 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
-import { createEmptyDocument, createLayerId, invertTransform, transformPoint } from './editorLayers';
+import { createEmptyDocument, createLayerId, findLayerAtPoint } from './editorLayers';
 import { DEFAULT_TEXT, isTextLayer, updateTextLayer } from './textLayers';
 
-export const findTextAtPoint = (doc, point) => [...doc.layers].reverse().find((layer) => {
-  if (!isTextLayer(layer) || !layer.visible || layer.opacity <= 0) return false;
-  const local = transformPoint(invertTransform(layer.transform), point);
-  return local.x >= 0 && local.y >= 0 && local.x <= layer.textLayout.width && local.y <= layer.textLayout.height;
-});
+export const findTextAtPoint = (doc, point) => findLayerAtPoint(doc, point, isTextLayer);
 
 export const useTextEditing = ({ doc, docRef, onCommit, onPreview, onSelection, selectedLayerIdsRef }) => {
   const [session, setSession] = useState(null);
