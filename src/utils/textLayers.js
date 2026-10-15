@@ -1,7 +1,7 @@
 export const TEXT_FONTS = ['sans-serif', 'serif', 'monospace'];
 export const TEXT_LIMIT = 10000;
 export const DEFAULT_TEXT = {
-  value: '', fontFamily: 'sans-serif', fontSize: 32, color: '#000000',
+  value: '', fontFamily: 'sans-serif', fontSize: 32, color: '#ff2b2b',
   bold: false, italic: false, align: 'left',
 };
 

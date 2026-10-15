@@ -930,6 +930,15 @@ function UnifiedPhotoEditor() {
     }, { rethrow: true }),
   }), [documentVisualSignature, runPixelOperation]);
   const { isExportBusy, resetExportState, handleCopyToPNG, ExportControls } = useImageExportControls(exportProvider, toast, 'edited', { automaticSizeUpdates: false });
+  // The header copy button reports beside itself instead of in the page toast.
+  const [copyFeedback, setCopyFeedback] = useState(null);
+  const copyFeedbackTimerRef = useRef();
+  useEffect(() => () => clearTimeout(copyFeedbackTimerRef.current), []);
+  const showCopyFeedback = useCallback(({ status, description }) => {
+    clearTimeout(copyFeedbackTimerRef.current);
+    setCopyFeedback({ status, label: status === 'success' ? 'Copied!' : description || 'Copy failed' });
+    copyFeedbackTimerRef.current = setTimeout(() => setCopyFeedback(null), status === 'success' ? 2000 : 4000);
+  }, []);
   const {
     ocrText,
     ocrWords,
@@ -2172,15 +2181,29 @@ function UnifiedPhotoEditor() {
           <Flex flex="1" />
 
           <Flex align="center" gap={2} wrap="wrap">
-            <Button
-              leftIcon={<Copy size={17} />}
-              colorScheme="blue"
-              onClick={handleCopyToPNG}
-              isDisabled={!hasDocument(doc) || isBusy || isExportBusy}
-              size="sm"
+            <Tooltip
+              isOpen={Boolean(copyFeedback)}
+              label={copyFeedback && (
+                <HStack spacing={1}>
+                  {copyFeedback.status === 'success' && <Check size={14} />}
+                  <Text>{copyFeedback.label}</Text>
+                </HStack>
+              )}
+              placement="bottom"
+              hasArrow
+              bg={copyFeedback?.status === 'error' ? 'red.500' : 'green.500'}
+              color="white"
             >
-              Copy as PNG
-            </Button>
+              <Button
+                leftIcon={<Copy size={17} />}
+                colorScheme="blue"
+                onClick={() => handleCopyToPNG(showCopyFeedback)}
+                isDisabled={!hasDocument(doc) || isBusy || isExportBusy}
+                size="sm"
+              >
+                Copy as PNG
+              </Button>
+            </Tooltip>
             <Button
               leftIcon={<Upload size={17} />}
               colorScheme="blue"

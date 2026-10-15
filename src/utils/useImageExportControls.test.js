@@ -129,8 +129,20 @@ test('copy receives its Blob promise during the click while an export revision b
   act(() => { job = controls.handleCopyToPNG(); });
   expect(copyImageBlob).toHaveBeenCalledTimes(1);
   expect(copyImageBlob.mock.calls[0][0]).toBeInstanceOf(Promise);
+  expect(copyImageBlob.mock.calls[0][1]).toBe(toast);
   expect(suppliedBlob).toBeUndefined();
   const blob = sizedBlob(1);
   await act(async () => { pending.resolve({ blob, revision: 'first' }); await job; });
   expect(suppliedBlob).toBe(blob);
+});
+
+test('copy reports through a caller-supplied notifier instead of the shared toast', async () => {
+  copyImageBlob.mockResolvedValue(true);
+  const blob = sizedBlob(1);
+  render({ revision: 'first', exportBlob: jest.fn(async () => ({ blob, revision: 'first' })) });
+  const notify = jest.fn();
+  let job;
+  act(() => { job = controls.handleCopyToPNG(notify); });
+  expect(copyImageBlob.mock.calls[0][1]).toBe(notify);
+  await act(async () => { await job; });
 });

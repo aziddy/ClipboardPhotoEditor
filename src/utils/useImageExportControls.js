@@ -130,12 +130,12 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
     if (automaticSizeUpdates) updateOutputSizes();
   }, [automaticSizeUpdates, updateOutputSizes]);
 
-  const handleCopyToPNG = useCallback(() => {
+  const handleCopyToPNG = useCallback((notify = toast) => {
     // Call write during the click. Safari accepts a promised Blob but does not
     // preserve activation across an awaited disk read or render.
-    return trackJob(copyImageBlob(getBlob('image/png', 1), toast));
+    return trackJob(copyImageBlob(getBlob('image/png', 1), notify));
   }, [getBlob, toast, trackJob]);
-  const handleCopyToJPG = handleCopyToPNG;
+  const handleCopyToJPG = useCallback(() => handleCopyToPNG(), [handleCopyToPNG]);
 
   const download = useCallback((format, quality) => trackJob((async () => {
     try {
@@ -185,7 +185,7 @@ export const useImageExportControls = (canvasSource, toast, downloadPrefix = 'ed
         <HStack w="100%" spacing={4}>
           <Button 
             colorScheme="blue" 
-            onClick={handleCopyToPNG}
+            onClick={() => handleCopyToPNG()}
             isDisabled={isExportBusy}
             flex={1}
           >
