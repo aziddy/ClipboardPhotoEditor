@@ -120,18 +120,25 @@ const TOOLS = {
   TEXT: 'text',
 };
 
+const TOOLBAR_TOOLS = [
+  { tool: TOOLS.MOVE, icon: MousePointer2, label: 'Move' },
+  { tool: TOOLS.PAN, icon: Hand, label: 'Pan' },
+  { tool: TOOLS.BRUSH, icon: Brush, label: 'Brush' },
+  { tool: TOOLS.ERASER, icon: Eraser, label: 'Eraser' },
+  { tool: TOOLS.TEXT, icon: Type, label: 'Text' },
+  { tool: TOOLS.CROP, icon: Crop, label: 'Crop' },
+  { tool: TOOLS.RESIZE, icon: Maximize2, label: 'Resize' },
+];
+
+// Number keys follow the toolbar order top to bottom.
 const TOOL_SHORTCUTS = {
-  1: TOOLS.MOVE,
+  ...Object.fromEntries(TOOLBAR_TOOLS.map(({ tool }, index) => [index + 1, tool])),
   m: TOOLS.MOVE,
-  2: TOOLS.BRUSH,
-  b: TOOLS.BRUSH,
-  3: TOOLS.CROP,
-  c: TOOLS.CROP,
-  4: TOOLS.RESIZE,
-  r: TOOLS.RESIZE,
-  5: TOOLS.PAN,
   h: TOOLS.PAN,
+  b: TOOLS.BRUSH,
   t: TOOLS.TEXT,
+  c: TOOLS.CROP,
+  r: TOOLS.RESIZE,
 };
 
 // Letter shortcuts per tool for toolbar tooltips; number keys are left out.
@@ -142,16 +149,6 @@ const TOOL_SHORTCUT_KEYS = Object.entries(TOOL_SHORTCUTS)
   }), {});
 
 const SHORTCUT_TOOLTIP_MS = 1000;
-
-const TOOLBAR_TOOLS = [
-  { tool: TOOLS.MOVE, icon: MousePointer2, label: 'Move' },
-  { tool: TOOLS.PAN, icon: Hand, label: 'Pan' },
-  { tool: TOOLS.BRUSH, icon: Brush, label: 'Brush' },
-  { tool: TOOLS.ERASER, icon: Eraser, label: 'Eraser' },
-  { tool: TOOLS.TEXT, icon: Type, label: 'Text' },
-  { tool: TOOLS.CROP, icon: Crop, label: 'Crop' },
-  { tool: TOOLS.RESIZE, icon: Maximize2, label: 'Resize' },
-];
 
 const TRANSFORM_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
