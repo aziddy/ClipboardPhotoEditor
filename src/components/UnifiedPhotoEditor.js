@@ -134,6 +134,13 @@ const TOOL_SHORTCUTS = {
   t: TOOLS.TEXT,
 };
 
+// Letter shortcuts per tool for toolbar tooltips; number keys are left out.
+const TOOL_SHORTCUT_KEYS = Object.entries(TOOL_SHORTCUTS)
+  .filter(([key]) => !/\d/.test(key))
+  .reduce((keysByTool, [key, tool]) => ({
+    ...keysByTool, [tool]: [...(keysByTool[tool] || []), key.toUpperCase()],
+  }), {});
+
 const SHORTCUT_TOOLTIP_MS = 1000;
 
 const TOOLBAR_TOOLS = [
@@ -522,10 +529,14 @@ const isEditableShortcutTarget = (target) => {
   return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
 };
 
-const ToolButton = ({ icon: Icon, label, isActive, onClick, isDisabled = false, isTooltipOpen = false }) => (
-  <Tooltip label={label} placement="right" hasArrow isOpen={isTooltipOpen || undefined}>
+const ToolButton = ({
+  icon: Icon, label, isActive, onClick, isDisabled = false, isTooltipOpen = false, shortcutKeys = [],
+}) => (
+  <Tooltip label={shortcutKeys.length ? `${label} (${shortcutKeys.join(' / ')})` : label}
+    placement="right" hasArrow isOpen={isTooltipOpen || undefined}>
     <IconButton
       aria-label={label}
+      aria-keyshortcuts={shortcutKeys.join(' ') || undefined}
       icon={<Icon size={18} />}
       onClick={onClick}
       isDisabled={isDisabled}
@@ -2345,6 +2356,7 @@ function UnifiedPhotoEditor() {
           >
             {TOOLBAR_TOOLS.map(({ tool, icon, label }) => (
               <ToolButton key={tool} icon={icon} label={label} isActive={activeTool === tool}
+                shortcutKeys={TOOL_SHORTCUT_KEYS[tool]}
                 onClick={() => { shortcutToolRef.current = null; chooseTool(tool); }}
                 isDisabled={!hasDocument(doc)} isTooltipOpen={!isVerticalToolbar && flashedTool === tool} />
             ))}
@@ -2362,6 +2374,7 @@ function UnifiedPhotoEditor() {
           >
             {TOOLBAR_TOOLS.map(({ tool, icon, label }) => (
               <ToolButton key={tool} icon={icon} label={label} isActive={activeTool === tool}
+                shortcutKeys={TOOL_SHORTCUT_KEYS[tool]}
                 onClick={() => { shortcutToolRef.current = null; chooseTool(tool); }}
                 isDisabled={!hasDocument(doc)} isTooltipOpen={isVerticalToolbar && flashedTool === tool} />
             ))}
