@@ -24,10 +24,10 @@ afterEach(() => { act(() => root.unmount()); jest.restoreAllMocks(); });
 
 test('sidebar and inline edits share a draft and commit one undo step', () => {
   run(() => editing.begin());
-  run(() => editing.update({ value: 'Hello' }));
   run(() => editing.place({ x: 10, y: 15 }));
   expect(editing.session.inline).toBe(true);
   expect(editing.layer.transform).toEqual([1, 0, 0, 1, 10, 15]);
+  run(() => editing.update({ value: 'Hello' }));
   run(() => editing.update({ value: 'Hello world', bold: true }));
   expect(commits).toBe(0);
   run(() => editing.finish());
@@ -51,4 +51,17 @@ test('unchanged edits are not history steps; clearing existing text is undoable'
   run(() => editing.begin(id)); run(() => editing.update({ value: '' })); run(() => editing.finish());
   expect(state.doc.layers).toHaveLength(1); expect(commits).toBe(2);
   expect(editorReducer(state, { type: 'undo' }).doc.layers[1].text.value).toBe('Keep');
+});
+
+test('clicks away end editing only once there is text to keep', () => {
+  expect(editing.isClickAway({ x: 300, y: 300 })).toBe(false);
+  run(() => editing.place({ x: 10, y: 15 }));
+  expect(editing.isClickAway({ x: 300, y: 300 })).toBe(false);
+  run(() => editing.update({ value: 'Hi' }));
+  expect(editing.isClickAway({ x: 14, y: 20 })).toBe(false);
+  expect(editing.isClickAway({ x: 300, y: 300 })).toBe(true);
+  expect(editing.isClickAway(null)).toBe(true);
+  run(() => editing.finish());
+  run(() => editing.begin(state.doc.activeLayerId));
+  expect(editing.isClickAway({ x: 300, y: 300 })).toBe(true);
 });

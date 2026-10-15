@@ -56,7 +56,7 @@ export const TextControls = ({ editing, onDone, onCancel, onNew, onEdit, canEdit
       </HStack>
       <Button size="sm" variant="outline" onClick={onNew}>New text layer</Button>
       {!session.isNew && <Button size="sm" variant="outline" onClick={onConvert}>Convert to image layer</Button>}
-      <Text fontSize="xs" color="gray.600">Enter adds a line. ⌘/Ctrl+Enter finishes. Escape cancels. Use Move to position, resize, or rotate text.</Text>
+      <Text fontSize="xs" color="gray.600">Enter adds a line. ⌘/Ctrl+Enter or clicking outside the text finishes. Escape cancels. Use Move to position, resize, or rotate text.</Text>
     </VStack>
   );
 };

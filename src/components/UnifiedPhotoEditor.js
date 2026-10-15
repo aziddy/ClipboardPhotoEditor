@@ -27,6 +27,7 @@ import {
   Textarea,
   Tooltip,
   VStack,
+  useBreakpointValue,
   useToast,
 } from '@chakra-ui/react';
 import {
@@ -132,6 +133,18 @@ const TOOL_SHORTCUTS = {
   h: TOOLS.PAN,
   t: TOOLS.TEXT,
 };
+
+const SHORTCUT_TOOLTIP_MS = 1000;
+
+const TOOLBAR_TOOLS = [
+  { tool: TOOLS.MOVE, icon: MousePointer2, label: 'Move' },
+  { tool: TOOLS.PAN, icon: Hand, label: 'Pan' },
+  { tool: TOOLS.BRUSH, icon: Brush, label: 'Brush' },
+  { tool: TOOLS.ERASER, icon: Eraser, label: 'Eraser' },
+  { tool: TOOLS.TEXT, icon: Type, label: 'Text' },
+  { tool: TOOLS.CROP, icon: Crop, label: 'Crop' },
+  { tool: TOOLS.RESIZE, icon: Maximize2, label: 'Resize' },
+];
 
 const TRANSFORM_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
@@ -509,8 +522,8 @@ const isEditableShortcutTarget = (target) => {
   return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
 };
 
-const ToolButton = ({ icon: Icon, label, isActive, onClick, isDisabled = false }) => (
-  <Tooltip label={label} placement="right" hasArrow>
+const ToolButton = ({ icon: Icon, label, isActive, onClick, isDisabled = false, isTooltipOpen = false }) => (
+  <Tooltip label={label} placement="right" hasArrow isOpen={isTooltipOpen || undefined}>
     <IconButton
       aria-label={label}
       icon={<Icon size={18} />}
@@ -698,6 +711,9 @@ function UnifiedPhotoEditor() {
   }, [runPixelOperation]);
 
   const [activeTool, setActiveTool] = useState(TOOLS.MOVE);
+  const shortcutToolRef = useRef(null);
+  const [flashedTool, setFlashedTool] = useState(null);
+  const isVerticalToolbar = useBreakpointValue({ base: false, lg: true });
   const [brushColor, setBrushColor] = useState(DEFAULT_BRUSH_COLOR);
   const [brushSize, setBrushSize] = useState(DEFAULT_BRUSH_SIZE);
   const [crop, setCrop] = useState(null);
@@ -1086,12 +1102,26 @@ function UnifiedPhotoEditor() {
       if (!nextTool || !hasDocument(docRef.current)) return;
 
       event.preventDefault();
+      shortcutToolRef.current = nextTool;
       chooseTool(nextTool);
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [chooseTool, redoDocument, undoDocument]);
+
+  // Flash the tooltip only once a shortcut's switch actually lands; chooseTool
+  // can reject a switch or defer it until a pending stroke commits.
+  useEffect(() => {
+    setFlashedTool(shortcutToolRef.current === activeTool ? activeTool : null);
+    shortcutToolRef.current = null;
+  }, [activeTool]);
+
+  useEffect(() => {
+    if (!flashedTool) return undefined;
+    const timer = setTimeout(() => setFlashedTool(null), SHORTCUT_TOOLTIP_MS);
+    return () => clearTimeout(timer);
+  }, [flashedTool]);
 
   useEffect(() => {
     const isSpaceKey = (event) => event.code === 'Space' || event.key === ' ';
@@ -1646,7 +1676,9 @@ function UnifiedPhotoEditor() {
     if (activeTool === TOOLS.TEXT && !isViewPanning) {
       const point = getCanvasPoint(event, false);
       const currentDoc = docRef.current;
-      if (point && point.x >= 0 && point.y >= 0 && point.x <= currentDoc.width && point.y <= currentDoc.height) textEditingRef.current.place(point);
+      const inBounds = point && point.x >= 0 && point.y >= 0 && point.x <= currentDoc.width && point.y <= currentDoc.height;
+      if (textEditingRef.current.isClickAway(inBounds ? point : null)) finishText();
+      else if (inBounds) textEditingRef.current.place(point);
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -1669,7 +1701,7 @@ function UnifiedPhotoEditor() {
     if (activeTool === TOOLS.MOVE) {
       startMoveInteraction(event);
     }
-  }, [activeTool, getCanvasPoint, isViewPanning, startCropInteraction, startMoveInteraction, startPanInteraction, startStroke]);
+  }, [activeTool, finishText, getCanvasPoint, isViewPanning, startCropInteraction, startMoveInteraction, startPanInteraction, startStroke]);
 
   const handleCanvasDoubleClick = useCallback((event) => {
     if (activeTool !== TOOLS.MOVE || busyRef.current) return;
@@ -2311,13 +2343,11 @@ function UnifiedPhotoEditor() {
             borderRadius="md"
             p={2}
           >
-            <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => chooseTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => chooseTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => chooseTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => chooseTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Type} label="Text" isActive={activeTool === TOOLS.TEXT} onClick={() => chooseTool(TOOLS.TEXT)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => chooseTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => chooseTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
+            {TOOLBAR_TOOLS.map(({ tool, icon, label }) => (
+              <ToolButton key={tool} icon={icon} label={label} isActive={activeTool === tool}
+                onClick={() => { shortcutToolRef.current = null; chooseTool(tool); }}
+                isDisabled={!hasDocument(doc)} isTooltipOpen={!isVerticalToolbar && flashedTool === tool} />
+            ))}
           </HStack>
 
           <VStack
@@ -2330,13 +2360,11 @@ function UnifiedPhotoEditor() {
             borderRadius="md"
             p={2}
           >
-            <ToolButton icon={MousePointer2} label="Move" isActive={activeTool === TOOLS.MOVE} onClick={() => chooseTool(TOOLS.MOVE)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Hand} label="Pan" isActive={activeTool === TOOLS.PAN} onClick={() => chooseTool(TOOLS.PAN)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Brush} label="Brush" isActive={activeTool === TOOLS.BRUSH} onClick={() => chooseTool(TOOLS.BRUSH)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Eraser} label="Eraser" isActive={activeTool === TOOLS.ERASER} onClick={() => chooseTool(TOOLS.ERASER)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Type} label="Text" isActive={activeTool === TOOLS.TEXT} onClick={() => chooseTool(TOOLS.TEXT)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Crop} label="Crop" isActive={activeTool === TOOLS.CROP} onClick={() => chooseTool(TOOLS.CROP)} isDisabled={!hasDocument(doc)} />
-            <ToolButton icon={Maximize2} label="Resize" isActive={activeTool === TOOLS.RESIZE} onClick={() => chooseTool(TOOLS.RESIZE)} isDisabled={!hasDocument(doc)} />
+            {TOOLBAR_TOOLS.map(({ tool, icon, label }) => (
+              <ToolButton key={tool} icon={icon} label={label} isActive={activeTool === tool}
+                onClick={() => { shortcutToolRef.current = null; chooseTool(tool); }}
+                isDisabled={!hasDocument(doc)} isTooltipOpen={isVerticalToolbar && flashedTool === tool} />
+            ))}
 
             <Divider />
 

@@ -94,10 +94,21 @@ export const useTextEditing = ({ doc, docRef, onCommit, onPreview, onSelection, 
     } else begin(hit?.id, point, true);
   }, [begin, docRef, onPreview, setCurrentSession]);
 
+  // A click away from text that has been typed (or is being re-edited) should end editing
+  // rather than move or replace it. `point` is null for clicks outside the image.
+  const isClickAway = useCallback((point) => {
+    const current = sessionRef.current;
+    if (!current) return false;
+    const working = docRef.current;
+    if (point && findTextAtPoint(working, point)?.id === current.layerId) return false;
+    const layer = working.layers.find((candidate) => candidate.id === current.layerId);
+    return !current.isNew || Boolean(layer?.text.value);
+  }, [docRef]);
+
   const showInline = useCallback(() => {
     if (sessionRef.current) setCurrentSession({ ...sessionRef.current, inline: true });
   }, [setCurrentSession]);
 
-  return { session, sessionRef, error, begin, finish, cancel, update, place, showInline,
+  return { session, sessionRef, error, begin, finish, cancel, update, place, isClickAway, showInline,
     layer: session ? doc.layers.find((layer) => layer.id === session.layerId) : null };
 };
